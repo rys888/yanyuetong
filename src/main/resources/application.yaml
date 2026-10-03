@@ -1,17 +1,19 @@
 server:
   port: 8081
 spring:
+  profiles:
+    active: local
   application:
     name: hmdp
   datasource:
-    driver-class-name: com.mysql.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
     username: root
-    password: 123
+    password: change_me
   redis:
-    host: 192.168.150.101
+    host: 127.0.0.1
     port: 6379
-    password: 123321
+    password: change_me
     lettuce:
       pool:
         max-active: 10
@@ -24,7 +26,7 @@ spring:
     host: localhost
     port: 5672
     username: guest
-    password: guest
+    password: change_me
     virtual-host: /
     publisher-confirm-type: correlated
     publisher-returns: true
@@ -36,7 +38,9 @@ spring:
         retry:
           enabled: false
 mybatis-plus:
-  type-aliases-package: com.hmdp.entity # 别名扫描包
+  type-aliases-package: com.hmdp.entity
+  configuration:
+    default-enum-type-handler: org.apache.ibatis.type.EnumTypeHandler
 logging:
   level:
     com.hmdp: debug

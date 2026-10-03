@@ -1,0 +1,9 @@
+# 复制为 application-local.yaml 并填入本机凭据
+spring:
+  datasource:
+    password: your_password_here
+  redis:
+    password: your_password_here
+  rabbitmq:
+    username: guest
+    password: your_password_here
