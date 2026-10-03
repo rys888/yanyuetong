@@ -20,6 +20,21 @@ spring:
         time-between-eviction-runs: 10s
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 1
+        # 手动 ack 模式下默认 recoverer 不会真正 nack、会卡死消费者，故关闭自动重试，由监听器显式 basicNack 进死信
+        retry:
+          enabled: false
 mybatis-plus:
   type-aliases-package: com.hmdp.entity # 别名扫描包
 logging:
