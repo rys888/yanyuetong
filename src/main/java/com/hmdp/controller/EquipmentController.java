@@ -46,14 +46,13 @@ public class EquipmentController {
     @PostMapping
     @RequireRole(UserRole.LAB_ADMIN)
     public Result saveEquipment(@RequestBody Equipment equipment) {
-        equipmentService.save(equipment);
-        return Result.ok(equipment.getId());
+        return Result.ok(equipmentService.saveEquipment(equipment));
     }
 
     @PutMapping
     @RequireRole(UserRole.LAB_ADMIN)
     public Result updateEquipment(@RequestBody Equipment equipment) {
-        equipmentService.updateById(equipment);
+        equipmentService.updateEquipment(equipment);
         return Result.ok();
     }
 
@@ -68,15 +67,14 @@ public class EquipmentController {
         } catch (IllegalArgumentException | NullPointerException e) {
             return Result.fail("设备状态不合法");
         }
-        Equipment equipment = new Equipment().setId(id).setStatus(status);
-        equipmentService.updateById(equipment);
+        equipmentService.updateEquipmentStatus(id, status);
         return Result.ok();
     }
 
     @DeleteMapping("/{id}")
     @RequireRole(UserRole.LAB_ADMIN)
     public Result deleteEquipment(@PathVariable("id") Long id) {
-        equipmentService.removeById(id);
+        equipmentService.deleteEquipment(id);
         return Result.ok();
     }
 }
