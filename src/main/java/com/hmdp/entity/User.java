@@ -3,6 +3,7 @@ package com.hmdp.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.hmdp.enums.UserRole;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -51,6 +52,11 @@ public class User implements Serializable {
      * 用户头像
      */
     private String icon = "";
+
+    /**
+     * 用户角色
+     */
+    private UserRole role;
 
     /**
      * 创建时间

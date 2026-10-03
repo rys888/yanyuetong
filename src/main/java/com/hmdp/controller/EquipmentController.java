@@ -1,10 +1,12 @@
 package com.hmdp.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.hmdp.annotation.RequireRole;
 import com.hmdp.dto.EquipmentQueryDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Equipment;
 import com.hmdp.enums.EquipmentStatus;
+import com.hmdp.enums.UserRole;
 import com.hmdp.service.IEquipmentService;
 import com.hmdp.vo.EquipmentVO;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -42,18 +44,21 @@ public class EquipmentController {
     }
 
     @PostMapping
+    @RequireRole(UserRole.LAB_ADMIN)
     public Result saveEquipment(@RequestBody Equipment equipment) {
         equipmentService.save(equipment);
         return Result.ok(equipment.getId());
     }
 
     @PutMapping
+    @RequireRole(UserRole.LAB_ADMIN)
     public Result updateEquipment(@RequestBody Equipment equipment) {
         equipmentService.updateById(equipment);
         return Result.ok();
     }
 
     @PutMapping("/{id}/status")
+    @RequireRole(UserRole.LAB_ADMIN)
     public Result updateEquipmentStatus(
             @PathVariable("id") Long id,
             @RequestParam("status") String statusValue) {
@@ -69,6 +74,7 @@ public class EquipmentController {
     }
 
     @DeleteMapping("/{id}")
+    @RequireRole(UserRole.LAB_ADMIN)
     public Result deleteEquipment(@PathVariable("id") Long id) {
         equipmentService.removeById(id);
         return Result.ok();
