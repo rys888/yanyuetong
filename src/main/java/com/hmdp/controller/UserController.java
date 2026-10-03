@@ -58,9 +58,10 @@ public class UserController {
      * @return 无
      */
     @PostMapping("/logout")
-    public Result logout(){
-        // TODO 实现登出功能
-        return Result.fail("功能未完成");
+    public Result logout(@RequestHeader(value = "authorization", required = false) String token) {
+        userService.logout(token);
+        UserHolder.removeUser();
+        return Result.ok();
     }
 
     @GetMapping("/me")
