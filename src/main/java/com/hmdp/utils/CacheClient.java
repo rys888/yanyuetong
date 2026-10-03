@@ -2,13 +2,17 @@ package com.hmdp.utils;
 
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.core.lang.UUID;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -17,6 +21,10 @@ import java.util.function.Function;
 import static com.hmdp.utils.RedisConstants.CACHE_NULL_TTL;
 import static com.hmdp.utils.RedisConstants.LOCK_CACHE_KEY;
 
+/**
+ * 缓存查询工具。设备详情正式采用 {@link #queryWithMutex} 的互斥锁重建（方案 A）；
+ * {@link #queryWithLogicalExpire} 为未启用的备选实现。
+ */
 @Slf4j
 @Component
 public class CacheClient {
@@ -24,6 +32,16 @@ public class CacheClient {
     private final StringRedisTemplate stringRedisTemplate;
 
     private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
+    private static final int MUTEX_MAX_RETRY = 20;
+    private static final long MUTEX_RETRY_INTERVAL_MS = 50L;
+    private static final long MUTEX_LOCK_TTL_SEC = 10L;
+    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
+
+    static {
+        UNLOCK_SCRIPT = new DefaultRedisScript<>();
+        UNLOCK_SCRIPT.setLocation(new ClassPathResource("unlock.lua"));
+        UNLOCK_SCRIPT.setResultType(Long.class);
+    }
 
     public CacheClient(StringRedisTemplate stringRedisTemplate) {
         this.stringRedisTemplate = stringRedisTemplate;
@@ -95,7 +113,8 @@ public class CacheClient {
         // 6.缓存重建
         // 6.1.获取互斥锁
         String lockKey = LOCK_CACHE_KEY + keyPrefix + id;
-        boolean isLock = tryLock(lockKey);
+        String lockValue = UUID.randomUUID().toString(true);
+        boolean isLock = tryLock(lockKey, lockValue);
         // 6.2.判断是否获取锁成功
         if (isLock){
             // 6.3.成功，开启独立线程，实现缓存重建
@@ -106,10 +125,10 @@ public class CacheClient {
                     // 重建缓存
                     this.setWithLogicalExpire(key, newR, time, unit);
                 } catch (Exception e) {
-                    throw new RuntimeException(e);
+                    log.error("缓存逻辑过期重建失败, key={}", key, e);
                 }finally {
                     // 释放锁
-                    unlock(lockKey);
+                    unlock(lockKey, lockValue);
                 }
             });
         }
@@ -120,58 +139,62 @@ public class CacheClient {
     public <R, ID> R queryWithMutex(
             String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         String key = keyPrefix + id;
-        // 1.从redis查询缓存
-        String json = stringRedisTemplate.opsForValue().get(key);
-        // 2.判断是否存在
-        if (StrUtil.isNotBlank(json)) {
-            // 3.存在，直接返回
-            return JSONUtil.toBean(json, type);
-        }
-        // 判断命中的是否是空值
-        if (json != null) {
-            // 返回一个错误信息
-            return null;
-        }
-
-        // 4.实现缓存重建
-        // 4.1.获取互斥锁
         String lockKey = LOCK_CACHE_KEY + keyPrefix + id;
-        R r = null;
-        try {
-            boolean isLock = tryLock(lockKey);
-            // 4.2.判断是否获取成功
-            if (!isLock) {
-                // 4.3.获取锁失败，休眠并重试
-                Thread.sleep(50);
-                return queryWithMutex(keyPrefix, id, type, dbFallback, time, unit);
+
+        for (int attempt = 0; attempt < MUTEX_MAX_RETRY; attempt++) {
+            String json = stringRedisTemplate.opsForValue().get(key);
+            if (StrUtil.isNotBlank(json)) {
+                return JSONUtil.toBean(json, type);
             }
-            // 4.4.获取锁成功，根据id查询数据库
-            r = dbFallback.apply(id);
-            // 5.不存在，返回错误
-            if (r == null) {
-                // 将空值写入redis
-                stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
-                // 返回错误信息
+            if (json != null) {
                 return null;
             }
-            // 6.存在，写入redis
-            this.set(key, r, time, unit);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }finally {
-            // 7.释放锁
-            unlock(lockKey);
+
+            String lockValue = UUID.randomUUID().toString(true);
+            if (!tryLock(lockKey, lockValue)) {
+                sleepQuietly(MUTEX_RETRY_INTERVAL_MS);
+                continue;
+            }
+
+            try {
+                String cached = stringRedisTemplate.opsForValue().get(key);
+                if (StrUtil.isNotBlank(cached)) {
+                    return JSONUtil.toBean(cached, type);
+                }
+                if (cached != null) {
+                    return null;
+                }
+                R r = dbFallback.apply(id);
+                if (r == null) {
+                    stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
+                    return null;
+                }
+                this.set(key, r, time, unit);
+                return r;
+            } finally {
+                unlock(lockKey, lockValue);
+            }
         }
-        // 8.返回
-        return r;
+
+        return dbFallback.apply(id);
     }
 
-    private boolean tryLock(String key) {
-        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
+    private boolean tryLock(String key, String value) {
+        Boolean flag = stringRedisTemplate.opsForValue()
+                .setIfAbsent(key, value, MUTEX_LOCK_TTL_SEC, TimeUnit.SECONDS);
         return BooleanUtil.isTrue(flag);
     }
 
-    private void unlock(String key) {
-        stringRedisTemplate.delete(key);
+    private void unlock(String key, String value) {
+        stringRedisTemplate.execute(UNLOCK_SCRIPT, Collections.singletonList(key), value);
+    }
+
+    private void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 }
