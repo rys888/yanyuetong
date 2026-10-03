@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.hmdp.mapper.EquipmentMapper">
+
+    <select id="selectEquipmentPage" resultType="com.hmdp.vo.EquipmentVO">
+        SELECT e.id, e.laboratory_id, e.category_id, e.name, e.description, e.location, e.image,
+               e.usage_requirement, e.status, e.booking_enabled, e.create_time, e.update_time,
+               l.name AS laboratory_name, l.campus, l.building, l.room,
+               c.name AS category_name
+        FROM tb_equipment e
+        LEFT JOIN tb_laboratory l ON e.laboratory_id = l.id
+        LEFT JOIN tb_equipment_category c ON e.category_id = c.id
+        <where>
+            <if test="q.laboratoryId != null">
+                AND e.laboratory_id = #{q.laboratoryId}
+            </if>
+            <if test="q.categoryId != null">
+                AND e.category_id = #{q.categoryId}
+            </if>
+            <if test="q.campus != null and q.campus != ''">
+                AND l.campus = #{q.campus}
+            </if>
+            <if test="q.name != null and q.name != ''">
+                AND e.name LIKE CONCAT('%', #{q.name}, '%')
+            </if>
+            <if test="q.status != null">
+                AND e.status = #{q.status}
+            </if>
+            <if test="q.bookingEnabled != null">
+                AND e.booking_enabled = #{q.bookingEnabled}
+            </if>
+        </where>
+        ORDER BY e.id DESC
+    </select>
+</mapper>

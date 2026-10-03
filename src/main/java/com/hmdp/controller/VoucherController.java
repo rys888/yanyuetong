@@ -43,15 +43,4 @@ public class VoucherController {
         voucherService.save(voucher);
         return Result.ok(voucher.getId());
     }
-
-
-    /**
-     * 查询店铺的优惠券列表
-     * @param shopId 店铺id
-     * @return 优惠券列表
-     */
-    @GetMapping("/list/{shopId}")
-    public Result queryVoucherOfShop(@PathVariable("shopId") Long shopId) {
-       return voucherService.queryVoucherOfShop(shopId);
-    }
 }
