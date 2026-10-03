@@ -4,11 +4,12 @@
 
 ## Current Phase
 
-Phase 0 — Baseline（已完成）
+Phase 1 — Legacy Cleanup（Review PASS，**待用户批准进入 Phase 2**）
 
 ## Passed
 
 - Phase 0 — Baseline ✅
+- Phase 1 — Legacy Cleanup ✅（Review PASS，详见 `docs/refactor/PHASE1-REVIEW.md`）
 
 ## Current Work
 
@@ -18,10 +19,14 @@ Phase 0 — Baseline（已完成）
 - [x] RabbitMQ 拓扑基线（Exchange/Queue/DLX/DLQ）
 - [x] 文档第 24 节 10 个问题逐条核验（全部属实）
 - [x] Git checkpoint（tag `before-lab-reservation-refactor`）
+- [x] Phase 1 删除 17 个遗留文件（Blog/评论/关注/ScrollResult/NormalTest）
+- [x] Phase 1 连带修改 10 个保留文件（RedisConstants 减 4 常量、GEO 分支剥离、sign 接口移除等）
+- [x] Phase 1 独立 Review：`mvn clean test-compile` BUILD SUCCESS（main 56 / test 2）
+- [x] Phase 1 主链完好性核验：秒杀/MQ/Lua 11 个文件零改动
 
 ## Pending
 
-- Phase 1 Legacy Cleanup
+- Phase 1 的 Git 提交（建议 `refactor: remove legacy social and geo modules`）
 - Phase 2 Laboratory & Equipment
 - Phase 3 User & Authorization
 - Phase 4 Equipment Cache
@@ -58,7 +63,9 @@ Phase 0 — Baseline（已完成）
 3. 四套历史秒杀实现以注释形式残留
 4. `SystemConstants.IMAGE_UPLOAD_DIR` 硬编码 Windows 路径
 5. 明文密码
+6. `UploadController` 的 `deleteBlogImg` / `/blog/delete` / `/blogs/` 语义残留（Phase 1 有意保留）
+7. DB 三表 `tb_blog` / `tb_blog_comments` / `tb_follow` 未删（用户已确认「只删代码」）
 
 ## Last Review
 
-Phase 0 baseline recorded — 2026-10-03，详见 `docs/refactor/PHASE0-BASELINE.md`
+Phase 1 Review — PASS — 2026-10-03，详见 `docs/refactor/PHASE1-REVIEW.md`
