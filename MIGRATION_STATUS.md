@@ -4,7 +4,7 @@
 
 ## Current Phase
 
-Phase 3 — User & Authorization（Review PASS，**待用户批准进入 Phase 4**）
+Phase 4 — Equipment Cache（Review PASS，**待用户批准进入 Phase 5**）
 
 ## Passed
 
@@ -12,6 +12,7 @@ Phase 3 — User & Authorization（Review PASS，**待用户批准进入 Phase 4
 - Phase 1 — Legacy Cleanup ✅（Review PASS，详见 `docs/refactor/PHASE1-REVIEW.md`）
 - Phase 2 — Laboratory & Equipment ✅（Review PASS，详见 `docs/refactor/PHASE2-REVIEW.md`）
 - Phase 3 — User & Authorization ✅（Review PASS，详见 `docs/refactor/PHASE3-REVIEW.md`）
+- Phase 4 — Equipment Cache ✅（Review PASS，详见 `docs/refactor/PHASE4-REVIEW.md`）
 
 ## Current Work
 
@@ -47,10 +48,23 @@ Phase 3 — User & Authorization（Review PASS，**待用户批准进入 Phase 4
 - [x] 独立 Review：401/403/200 全矩阵亲自实测、遗留 Session fail-safe 验证、DDL 幂等双跑、`mvn test` 2/2 PASS
 - [x] 1011 个既有用户全部自动获得默认 `USER`，无一破坏
 
+### Phase 4（已完成）
+
+- [x] **修复 P1-8**：`CacheClient` 互斥失效 —— per-acquisition 归属令牌 + 复用 `unlock.lua` 原子比对删除 +
+      递归改有界循环 + 持锁后双重检查 + 中断位复位；逻辑过期路径同步修复（闭包令牌 + `log.error`）
+- [x] `queryWithPassThrough` 未改；`unlock.lua` / `SimpleRedisLock` / `RedisData` 零触碰
+- [x] 设备详情缓存：Key `lab:equipment:{id}`，Cache Aside + 空值缓存（2min）+ 互斥重建（方案 A）
+- [x] TTL `30min + [0,5min)` 抖动（调用点计算，不侵入 `CacheClient.set` 通用语义）
+- [x] 缓存失效下沉 Service 层：`save/update/updateStatus/delete` 四个方法内完成数据变更 + 删缓存
+- [x] 回源方法拆为 `private queryEquipmentByIdFromDb`，杜绝 `dbFallback` 自递归
+- [x] 新增 7 个测试（互斥 3 + 缓存 4），空值/穿透/失效/Hutool 往返逐字段断言全覆盖
+- [x] 独立 Review：**隔离实验**证明旧实现可证伪（T1 失败）、归属校验可证伪（T1b 失败）、修复版 9/9 通过
+- [x] 运行时实测：直改 DB 后接口仍返旧值（证明读缓存）、更新后失效、权限 401/403/200 零回归、基线数据未破坏
+- [x] 本地提交（见 Pending）
+
 ## Pending
 
-- Phase 3 的 Git 提交（建议 `feat: add user roles and authorization`）
-- Phase 4 Equipment Cache
+- Phase 4 的 Git 提交（`fix: repair CacheClient mutex mutual exclusion` + `feat: add equipment detail cache`）
 - Phase 5 Reservation Batch
 - Phase 6 Redis + Lua Reservation
 - Phase 7 RabbitMQ Reservation
@@ -60,9 +74,12 @@ Phase 3 — User & Authorization（Review PASS，**待用户批准进入 Phase 4
 
 ## Known Issues
 
-### 已解决（原 P0）
+### 已解决
 
-- [x] 本机 MySQL / Redis / RabbitMQ 凭据 —— 用户提供，三方连接全部验证通过
+- [x] **P0** 本机 MySQL / Redis / RabbitMQ 凭据 —— 用户提供，三方连接全部验证通过
+- [x] **P1-8** `CacheClient.queryWithMutex` 互斥失效 —— Phase 4 修复，并经**隔离实验**证明可被测试证伪
+      （旧实现 T1 失败 `expected: <1> but was: <2>`；去掉归属校验 T1b 失败；修复版 9/9 通过）
+      → 详见 `docs/refactor/PHASE4-REVIEW.md` §5
 
 ### P1（业务/一致性缺陷，后续 Phase 处理）
 
@@ -73,8 +90,7 @@ Phase 3 — User & Authorization（Review PASS，**待用户批准进入 Phase 4
 5. Lua 不校验预约时间窗口 → Phase 5 / 6
 6. DLQ 无治理入口 → Phase 8
 7. MQ 直接发送数据库 Entity → Phase 7
-8. **`CacheClient.queryWithMutex` 互斥失效**：抢锁失败的线程递归返回后，其 `finally` 会删除锁持有者的锁。
-   当前无调用方（惰性缺陷），但 Phase 4 将启用 `CacheClient`，**必须在 Phase 4 修复** → **Phase 4（准入前置）**
+8. ~~`CacheClient.queryWithMutex` 互斥失效~~ → **已于 Phase 4 修复**（见「已解决」）
 9. **LAB_ADMIN 无实验室归属约束**：任何 LAB_ADMIN 可管理任意实验室与设备（计划 §6 称"管理自己负责的实验室"）。
    经用户 2026-10-04 裁决，归属模型**推迟到 Phase 5** → Phase 5
    （届时需给已标注的 7 个端点补"且该实验室归我管"的判断）
@@ -100,7 +116,15 @@ Phase 3 — User & Authorization（Review PASS，**待用户批准进入 Phase 4
     Phase 3 的脚本已改用幂等写法，Phase 2 的待回补
 13. `tb_user.password` 从未被使用（密码登录未实现）；种子管理员 `13900000001` 无密码，只能验证码登录
 14. `RoleInterceptor` 类级注解分支当前无使用者（按设计保留）；403 响应体为空系有意选择
+15. `CacheClientMutexTest` 的 T1 夹具过度复杂（`spy` + 线程改名 + `doAnswer` 忙等 + 用 `"{}"` 规避 Hutool
+    对顶层 JSON 字符串 `toBean(String.class)` 的限制）；断言有效但脆弱 → Phase 10 评估简化
+16. `CacheClient.queryWithPassThrough` / `queryWithLogicalExpire` 已无生产调用方（设备详情只用 `queryWithMutex`）
+    → Phase 10 决定去留
+17. `EquipmentCacheTest` 通过 MyBatis `Interceptor` 匹配 `EquipmentMapper.selectById` 语句 id 计数；
+    若回源语句变更会**静默失效**（测试仍通过但不再测任何东西）→ 维护性提醒
+18. 缓存删除失败无补偿（靠 30min TTL 兜底）；重试耗尽的兜底直查不写缓存，极端竞争下可能惊群 → Phase 8 范围
+19. 设计文档 §7 曾错称 T1「直击 D2」，已更正并补 T1b（自查发现，见 `PHASE4-REVIEW.md` §5）
 
 ## Last Review
 
-Phase 3 Review — PASS — 2026-10-04，详见 `docs/refactor/PHASE3-REVIEW.md`
+Phase 4 Review — PASS — 2026-10-04，详见 `docs/refactor/PHASE4-REVIEW.md`
