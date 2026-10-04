@@ -45,6 +45,7 @@ class LaboratoryOwnershipTest {
     private Laboratory laboratoryB;
     private Equipment equipmentA;
     private Equipment equipmentB;
+    private Equipment rejectedEquipment;
     private Long additionallyCreatedEquipmentId;
     private Long additionallyCreatedLaboratoryId;
 
@@ -73,6 +74,9 @@ class LaboratoryOwnershipTest {
         }
         if (equipmentB != null && equipmentB.getId() != null) {
             equipmentService.removeById(equipmentB.getId());
+        }
+        if (rejectedEquipment != null && rejectedEquipment.getId() != null) {
+            equipmentService.removeById(rejectedEquipment.getId());
         }
         if (additionallyCreatedLaboratoryId != null) {
             laboratoryService.removeById(additionallyCreatedLaboratoryId);
@@ -119,15 +123,15 @@ class LaboratoryOwnershipTest {
     @Test
     void shouldRejectSavingEquipmentToOtherAdministratorsLaboratory() {
         loginAs(adminA);
-        Equipment equipment = new Equipment()
+        rejectedEquipment = new Equipment()
                 .setLaboratoryId(laboratoryB.getId())
                 .setCategoryId(9_000_000_000L)
                 .setName("越权新增设备")
                 .setStatus(EquipmentStatus.AVAILABLE)
                 .setBookingEnabled(true);
 
-        assertThrows(ForbiddenException.class, () -> equipmentService.saveEquipment(equipment));
-        assertNull(equipment.getId());
+        assertThrows(ForbiddenException.class, () -> equipmentService.saveEquipment(rejectedEquipment));
+        assertNull(rejectedEquipment.getId());
     }
 
     @Test

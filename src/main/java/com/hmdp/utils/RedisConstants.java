@@ -14,4 +14,7 @@ public class RedisConstants {
 
     public static final String LOCK_CACHE_KEY = "lock:";
 
+    public static final String RESERVATION_BATCH_QUOTA_KEY = "reservation:batch:quota:";
+    public static final Long RESERVATION_BATCH_QUOTA_TTL_BUFFER_HOURS = 24L;
+
 }

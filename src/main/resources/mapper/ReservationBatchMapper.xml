@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.hmdp.mapper.ReservationBatchMapper">
+
+    <sql id="batchColumns">
+        b.id, b.equipment_id, b.start_time, b.end_time,
+        b.booking_start_time, b.booking_end_time, b.total_quota, b.remaining_quota,
+        b.status, b.create_time, b.update_time,
+        e.name AS equipment_name, e.laboratory_id,
+        l.name AS laboratory_name
+    </sql>
+
+    <select id="selectBatchDetailById" resultType="com.hmdp.vo.ReservationBatchVO">
+        SELECT <include refid="batchColumns"/>
+        FROM tb_reservation_batch b
+        LEFT JOIN tb_equipment e ON b.equipment_id = e.id
+        LEFT JOIN tb_laboratory l ON e.laboratory_id = l.id
+        WHERE b.id = #{id}
+    </select>
+
+    <select id="selectReservationBatchPage" resultType="com.hmdp.vo.ReservationBatchVO">
+        SELECT <include refid="batchColumns"/>
+        FROM tb_reservation_batch b
+        LEFT JOIN tb_equipment e ON b.equipment_id = e.id
+        LEFT JOIN tb_laboratory l ON e.laboratory_id = l.id
+        <where>
+            <if test="q.equipmentId != null">
+                AND b.equipment_id = #{q.equipmentId}
+            </if>
+            <if test="q.laboratoryId != null">
+                AND e.laboratory_id = #{q.laboratoryId}
+            </if>
+            <if test="q.status != null">
+                AND b.status = #{q.status}
+            </if>
+            <if test="publicOnly">
+                AND b.status IN ('PUBLISHED', 'CLOSED')
+            </if>
+            <if test="adminUserId != null">
+                AND l.admin_user_id = #{adminUserId}
+            </if>
+        </where>
+        ORDER BY b.id DESC
+    </select>
+</mapper>
