@@ -12,6 +12,7 @@ import com.hmdp.entity.ReservationBatch;
 import com.hmdp.enums.BookingState;
 import com.hmdp.enums.EquipmentStatus;
 import com.hmdp.enums.ReservationBatchStatus;
+import com.hmdp.enums.UserRole;
 import com.hmdp.exception.BadRequestException;
 import com.hmdp.exception.ForbiddenException;
 import com.hmdp.mapper.ReservationBatchMapper;
@@ -21,17 +22,25 @@ import com.hmdp.service.IReservationBatchService;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
 import com.hmdp.vo.ReservationBatchVO;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static com.hmdp.utils.RedisConstants.RESERVATION_BATCH_QUOTA_KEY;
 import static com.hmdp.utils.RedisConstants.RESERVATION_BATCH_QUOTA_TTL_BUFFER_HOURS;
+import static com.hmdp.utils.RedisConstants.RESERVATION_BATCH_USERS_KEY;
 
+@Slf4j
 @Service
 public class ReservationBatchServiceImpl
         extends ServiceImpl<ReservationBatchMapper, ReservationBatch>
@@ -160,7 +169,7 @@ public class ReservationBatchServiceImpl
         if (!updated) {
             throw new BadRequestException("批次状态已变化，关闭失败");
         }
-        stringRedisTemplate.delete(quotaKey(id));
+        stringRedisTemplate.delete(Arrays.asList(quotaKey(id), usersKey(id)));
     }
 
     @Override
@@ -180,7 +189,7 @@ public class ReservationBatchServiceImpl
         if (!updated) {
             throw new BadRequestException("批次状态已变化，取消失败");
         }
-        stringRedisTemplate.delete(quotaKey(id));
+        stringRedisTemplate.delete(Arrays.asList(quotaKey(id), usersKey(id)));
     }
 
     @Override
@@ -189,6 +198,13 @@ public class ReservationBatchServiceImpl
         if (batch == null) {
             return null;
         }
+        UserDTO user = UserHolder.getUser();
+        if ((user == null || user.getRole() != UserRole.LAB_ADMIN)
+                && batch.getStatus() != ReservationBatchStatus.PUBLISHED
+                && batch.getStatus() != ReservationBatchStatus.CLOSED) {
+            return null;
+        }
+        fillRemainingQuotaFromRedis(Collections.singletonList(batch));
         fillBookingState(batch, LocalDateTime.now());
         return batch;
     }
@@ -223,6 +239,7 @@ public class ReservationBatchServiceImpl
         Page<ReservationBatchVO> page = new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE);
         IPage<ReservationBatchVO> result = getBaseMapper()
                 .selectReservationBatchPage(page, query, adminUserId, publicOnly);
+        fillRemainingQuotaFromRedis(result.getRecords());
         LocalDateTime now = LocalDateTime.now();
         result.getRecords().forEach(batch -> fillBookingState(batch, now));
         return result;
@@ -306,7 +323,45 @@ public class ReservationBatchServiceImpl
                 now));
     }
 
+    private void fillRemainingQuotaFromRedis(List<ReservationBatchVO> batches) {
+        List<ReservationBatchVO> published = batches.stream()
+                .filter(batch -> batch.getStatus() == ReservationBatchStatus.PUBLISHED)
+                .collect(Collectors.toList());
+        if (published.isEmpty()) {
+            return;
+        }
+        List<String> keys = published.stream()
+                .map(batch -> quotaKey(batch.getId()))
+                .collect(Collectors.toList());
+        try {
+            List<String> quotas = stringRedisTemplate.opsForValue().multiGet(keys);
+            if (quotas == null) {
+                log.warn("批次名额批量读取返回空，回落 MySQL：batchIds={}",
+                        published.stream().map(ReservationBatchVO::getId).collect(Collectors.toList()));
+                return;
+            }
+            List<Long> missingBatchIds = new ArrayList<>();
+            for (int i = 0; i < published.size(); i++) {
+                String quota = quotas.get(i);
+                if (quota != null) {
+                    published.get(i).setRemainingQuota(Integer.valueOf(quota));
+                } else {
+                    missingBatchIds.add(published.get(i).getId());
+                }
+            }
+            if (!missingBatchIds.isEmpty()) {
+                log.warn("批次名额键不存在，回落 MySQL：batchIds={}", missingBatchIds);
+            }
+        } catch (RuntimeException e) {
+            log.warn("批次名额读取 Redis 失败，回落 MySQL：keys={}", keys, e);
+        }
+    }
+
     private String quotaKey(Long id) {
         return RESERVATION_BATCH_QUOTA_KEY + id;
+    }
+
+    private String usersKey(Long id) {
+        return RESERVATION_BATCH_USERS_KEY + id;
     }
 }

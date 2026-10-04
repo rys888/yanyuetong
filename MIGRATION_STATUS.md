@@ -4,7 +4,7 @@
 
 ## Current Phase
 
-Phase 5 — Reservation Batch（Review PASS，**待用户批准进入 Phase 6**）
+Phase 6 — Redis + Lua Reservation（Review PASS，**待用户批准提交 / 进入 Phase 7**）
 
 ## Passed
 
@@ -14,6 +14,7 @@ Phase 5 — Reservation Batch（Review PASS，**待用户批准进入 Phase 6**�
 - Phase 3 — User & Authorization ✅（Review PASS，详见 `docs/refactor/PHASE3-REVIEW.md`）
 - Phase 4 — Equipment Cache ✅（Review PASS，详见 `docs/refactor/PHASE4-REVIEW.md`）
 - Phase 5 — Reservation Batch ✅（Review PASS，详见 `docs/refactor/PHASE5-REVIEW.md`）
+- Phase 6 — Redis + Lua Reservation ✅（Review PASS，详见 `docs/refactor/PHASE6-REVIEW.md`）
 
 ## Current Work
 
@@ -97,9 +98,33 @@ Phase 5 — Reservation Batch（Review PASS，**待用户批准进入 Phase 6**�
       （V6 → R6、V7 → R7、V8 → R7；其中 V8 需改用**错开释放**才可证伪，见 `PHASE5-REVIEW.md` §9.1）
 - [x] HTTP 端到端：8 端点鉴权矩阵、归属 403、状态白名单、R9 之后的行为复验
 
+### Phase 6（已完成，待提交）
+
+- [x] `reservation.lua`：**漏斗顺序** EXISTS(1) → 窗口(4/5) → 容量(2) → 去重(3) → `DECR`+`SADD`+`EXPIRE`；
+      **无字面量 key**、**无 `DECR` 后夹取**（加了会让「名额永不为负」失去判别力）
+- [x] `ReservationQuotaExecutor`：脚本唯一调用点，静态加载（沿用 `SimpleRedisLock` 模式）
+- [x] **ARGV 全为 String**：`DefaultScriptExecutor` 会把每个 ARGV 交给 `StringRedisSerializer`，
+      传 `Long` 会在运行期抛 `ClassCastException`（`javap -c` 反汇编确认）；已写成硬约束并逐项核对通过
+- [x] 返回码 0–5 与 `ReservationResultCode` 一一映射；脏配额值抛错（响亮失败）
+- [x] Redis 模型：`reservation:batch:quota:{id}`（`publish` `SET NX` 建、`close`/`cancel` 删）
+      + `reservation:batch:users:{id}`（Lua 惰性 `SADD`+`EXPIRE`）；**「名额键存在」⟺「批次可预约」，无状态镜像**
+- [x] 双方向论证：撤销方向由 Lua 的 `EXISTS` 守；**激活方向由 Java 状态闸门守**
+      （Phase 5.2 的 `publish` 是「先建键、后 CAS 提交状态」，Lua 的 `EXISTS` 在这个方向会误放行）
+- [x] 读路径优先取 Redis（用户裁定 D1）；学生读 `DRAFT`/`CANCELLED` 批次详情返回 `null`（用户裁定 D2）
+- [x] `requestId` 与 `reservationId` 合一，只留 `reservationId`（用户裁定 D3），且在 Lua 之前生成
+- [x] 测试：`ReservationQuotaExecutorTest` 8 个 + `ReservationSubmitTest` 17 个；`mvn test` **76 run / 0 failures**
+- [x] **F7 实验证明「必须用 Lua」**：仅把校验与扣减拆成两次往返（守卫一个不少）→ 20 并发抢 5 名额 **9 人成功**、
+      同一用户 20 并发 **13 次成功**；Lua 实现下同一批用例恒绿
+- [x] 独立 Review：**13 组变体 + 3 组窗口可达性实验**（全部有效、0 组无效）→ 抓出并关闭 **2 处服务层覆盖空洞**：
+      ① 服务层从未验证 Lua 的 `EXISTS` 是撤销方向的权威（F1 下 15 个用例全绿）；
+      ② 分页路径的读覆盖零覆盖（F6 只打红详情路径）
+- [x] 返工补 T21/T22 后用同一实验复验：删 `EXISTS` → 只有 T21 变红；覆盖改空实现 → T22 + T13 变红
+- [x] 关闭 P1-5 / P2-1 / P2-2 / P2-3；文档更正 §3.3 的「500」（实为 200，见 P2-25）
+- [x] 环境复原：Redis 无残留键；DB 回到基线（batch 0 / equipment 12 / laboratory 4 / user 1013），
+      并清理了中途 kill 掉 campaign 所留的一组夹具
+
 ## Pending
 
-- Phase 6 Redis + Lua Reservation
 - Phase 7 RabbitMQ Reservation
 - Phase 8 Consistency & Reliability
 - Phase 9 Cancellation & Fulfillment
@@ -118,6 +143,10 @@ Phase 5 — Reservation Batch（Review PASS，**待用户批准进入 Phase 6**�
       → 详见 `docs/refactor/PHASE5-REVIEW.md` §5
 - [x] **新增** H9 / H10 / H12 三个并发缺陷 —— Phase 5.2 修复（先运行时复现、再修复、再用同一实验证明修复）
       → 详见 `docs/refactor/PHASE5-REVIEW.md` §3
+- [x] **新增** 两个服务层测试覆盖空洞 —— Phase 6 变体实验发现并关闭
+      （① 服务层从未验证 Lua `EXISTS` 是撤销方向的权威；② 分页路径的读覆盖零覆盖）
+      变体证据：删掉 Lua 的 `EXISTS` 后 15 个服务层用例**全绿**；读覆盖改空实现后只有详情路径变红
+      → 详见 `docs/refactor/PHASE6-REVIEW.md` §6
 
 ### P1（业务/一致性缺陷，后续 Phase 处理）
 
@@ -125,7 +154,8 @@ Phase 5 — Reservation Batch（Review PASS，**待用户批准进入 Phase 6**�
 2. 消费端扣库存 + INSERT 无事务 → Phase 8
 3. Confirm Timeout 立即回滚 Redis → Phase 8
 4. 补偿 Lua 不幂等 → Phase 8
-5. Lua 不校验预约时间窗口 → Phase 6（Phase 5 尚未引入 Lua，预约链路整体在 Phase 6 重建）
+5. ~~Lua 不校验预约时间窗口~~ → **已于 Phase 6 关闭**（`reservation.lua` 已实现窗口校验，返回码 4/5）。
+   注意其**可达性**见 `PHASE6-REVIEW.md` §4.3：Java 用同一个 `now` 先判，故当前 Lua 的窗口守卫是被遮蔽的冗余（保留）
 6. DLQ 无治理入口 → Phase 8
 7. MQ 直接发送数据库 Entity → Phase 7
 8. ~~`CacheClient.queryWithMutex` 互斥失效~~ → **已于 Phase 4 修复**（见「已解决」）
@@ -136,9 +166,9 @@ Phase 5 — Reservation Batch（Review PASS，**待用户批准进入 Phase 6**�
 
 ### P2（清理项）
 
-1. Redis Key 重复定义（Java 常量 vs Lua 字面量）
-2. `seckill:stock:` / `seckill:order:` 无 TTL
-3. 四套历史秒杀实现以注释形式残留
+1. ~~Redis Key 重复定义（Java 常量 vs Lua 字面量）~~ → **已于 Phase 6 关闭**：`reservation.lua` 全部经 `KEYS[]` 寻址，无字面量 key
+2. ~~`seckill:stock:` / `seckill:order:` 无 TTL~~ → **已随 Phase 5.0 删除而消失**（Phase 6 全树核查确认零残留）
+3. ~~四套历史秒杀实现以注释形式残留~~ → **已随 Phase 5.0 删除而消失**（`src/` 树中 `秒杀`/`seckill`/`voucher` 仅剩保留的建库脚本 `db/hmdp.sql`）
 4. `SystemConstants.IMAGE_UPLOAD_DIR` 硬编码 Windows 路径
 5. `SystemConstants.MAX_PAGE_SIZE` 已无引用（死常量）
 6. 明文密码（`application.yaml` 已占位 `change_me`，真实凭据在 gitignored 的 `application-local.yaml`）
@@ -172,8 +202,25 @@ Phase 5 — Reservation Batch（Review PASS，**待用户批准进入 Phase 6**�
     （"去掉 `WHERE status='DRAFT'` → 必须失败"）**是错的**，已更正（串行路径根本走不到那条 UPDATE）→ 已修文档
 24. `ReservationBatchLifecycleTest` 的并发用例依赖**时序**（错开释放扫描）；正确实现下恒绿，但判别力是概率性的
     （V6 实测 3/18 命中）。已登记为固有局限，见 `PHASE5-REVIEW.md` §11
+25. **全局异常兜底的 HTTP 状态码**：`WebExceptionAdvice.handleRuntimeException` 未声明 `@ResponseStatus`，
+    因此服务器故障返回 **HTTP 200** + `Result.fail("服务器异常")`；且 `HttpMessageNotReadableException`
+    这类**客户端**错误也落到同一兜底。属跨切面契约（正确做法应区分 400/500），Phase 6 已更正设计文档措辞
+    但未改代码 → Phase 10
+26. `ReservationBatchLifecycleTest.shouldIncludePublishedAndClosedBatchesOnPublicPage` 隐含依赖
+    「夹具落在第 1 页」（`DEFAULT_PAGE_SIZE = 5` + `ORDER BY b.id DESC`）；库里公开批次累积后会环境相关地变红。
+    Phase 6 新增的分页用例已改用 `equipmentId` 收窄查询消除该依赖，Phase 5 的这条待同样加固 → Phase 10
+27. **测试夹具手机号碰撞概率**：夹具用 `% 10_000_000L` 生成后缀，对 `tb_user.phone` 的唯一索引
+    （`uniqe_key_phone`）存在约 1e-5 量级的生日碰撞概率（Phase 5 用 `% 100_000_000L`，空间大 10 倍）。
+    当前实测未命中，登记为已知概率性风险，不阻塞
+28. **中断 Spring 集成测试会留下夹具残留**：中途 kill 测试进程时正在执行的用例 `@AfterEach` 不跑，
+    会留下实验室/设备/用户/批次各一行（Phase 6 实测残留一组，已清理）。
+    收尾动作应包含一次 DB 残留检查，而不是只看 `mvn` 退出码 → 纳入 Phase 10 的收尾清单
 
 ## Last Review
 
-Phase 5 Review — PASS — 2026-10-04，详见 `docs/refactor/PHASE5-REVIEW.md`
+Phase 6 Review — PASS — 2026-10-04，详见 `docs/refactor/PHASE6-REVIEW.md`
+（含 13 组变体 + 3 组窗口可达性实验；抓出并关闭 2 处服务层覆盖空洞后，用同一实验复验通过。
+核心数字：把原子脚本换成两段式实现 → 20 并发抢 5 名额 **9 人成功**；同一用户 20 并发 **13 次成功**）
+
+上一轮：Phase 5 Review — PASS — 2026-10-04，详见 `docs/refactor/PHASE5-REVIEW.md`
 （含 3 轮返工闭环：先运行时复现 H9/H10，再修复，再用 17 组变体实验核验测试判别力）
