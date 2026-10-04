@@ -34,6 +34,9 @@ public class Laboratory implements Serializable {
 
     private LaboratoryStatus status;
 
+    /** 负责该实验室的管理员用户id；null 表示未分配（未分配时任何人都不能管理） */
+    private Long adminUserId;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;
