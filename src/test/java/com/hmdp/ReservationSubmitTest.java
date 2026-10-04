@@ -1,10 +1,12 @@
 package com.hmdp;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.hmdp.dto.ReservationBatchQueryDTO;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Equipment;
 import com.hmdp.entity.Laboratory;
+import com.hmdp.entity.Reservation;
 import com.hmdp.entity.ReservationBatch;
 import com.hmdp.entity.User;
 import com.hmdp.enums.EquipmentStatus;
@@ -13,6 +15,7 @@ import com.hmdp.enums.ReservationBatchStatus;
 import com.hmdp.enums.UserRole;
 import com.hmdp.exception.BadRequestException;
 import com.hmdp.exception.ForbiddenException;
+import com.hmdp.mapper.ReservationMapper;
 import com.hmdp.service.IEquipmentService;
 import com.hmdp.service.ILaboratoryService;
 import com.hmdp.service.IReservationBatchService;
@@ -23,6 +26,9 @@ import com.hmdp.vo.ReservationBatchVO;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
@@ -31,6 +37,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -41,6 +48,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import static com.hmdp.config.RabbitMQConfig.RESERVATION_CREATE_DLQ;
+import static com.hmdp.config.RabbitMQConfig.RESERVATION_CREATE_QUEUE;
 import static com.hmdp.utils.RedisConstants.CACHE_EQUIPMENT_KEY;
 import static com.hmdp.utils.RedisConstants.RESERVATION_BATCH_QUOTA_KEY;
 import static com.hmdp.utils.RedisConstants.RESERVATION_BATCH_USERS_KEY;
@@ -51,6 +60,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * 本类只验证 submit 的同步契约，故刻意停用消费者；异步落库由 ReservationMqTest 覆盖。
+ */
 @SpringBootTest
 class ReservationSubmitTest {
 
@@ -70,7 +82,16 @@ class ReservationSubmitTest {
     private IUserService userService;
 
     @Resource
+    private ReservationMapper reservationMapper;
+
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private AmqpAdmin rabbitAdmin;
+
+    @Resource
+    private RabbitListenerEndpointRegistry listenerEndpointRegistry;
 
     private final List<Long> batchIds = new ArrayList<>();
     private final List<User> users = new ArrayList<>();
@@ -84,6 +105,7 @@ class ReservationSubmitTest {
     @BeforeEach
     void setUp() {
         UserHolder.removeUser();
+        stopListenerAndPurgeQueues();
         phoneSuffix = String.format("%07d", Math.abs(System.nanoTime() % 10_000_000L));
         admin = createUser(98, "预约测试管理员", UserRole.LAB_ADMIN);
         user1 = createUser(1, "预约测试学生1", UserRole.USER);
@@ -95,21 +117,35 @@ class ReservationSubmitTest {
     @AfterEach
     void cleanUp() {
         UserHolder.removeUser();
-        for (Long batchId : batchIds) {
-            stringRedisTemplate.delete(Arrays.asList(quotaKey(batchId), usersKey(batchId)));
-            reservationBatchService.removeById(batchId);
+        MessageListenerContainer container = reservationListenerContainer();
+        if (container.isRunning()) {
+            container.stop();
         }
-        if (equipment != null && equipment.getId() != null) {
-            stringRedisTemplate.delete(CACHE_EQUIPMENT_KEY + equipment.getId());
-            equipmentService.removeById(equipment.getId());
-        }
-        if (laboratory != null && laboratory.getId() != null) {
-            laboratoryService.removeById(laboratory.getId());
-        }
-        for (User user : users) {
-            if (user.getId() != null) {
-                userService.removeById(user.getId());
+        try {
+            rabbitAdmin.purgeQueue(RESERVATION_CREATE_QUEUE, false);
+            rabbitAdmin.purgeQueue(RESERVATION_CREATE_DLQ, false);
+            if (!batchIds.isEmpty()) {
+                reservationMapper.delete(new LambdaQueryWrapper<Reservation>()
+                        .in(Reservation::getBatchId, batchIds));
             }
+            for (Long batchId : batchIds) {
+                stringRedisTemplate.delete(Arrays.asList(quotaKey(batchId), usersKey(batchId)));
+                reservationBatchService.removeById(batchId);
+            }
+            if (equipment != null && equipment.getId() != null) {
+                stringRedisTemplate.delete(CACHE_EQUIPMENT_KEY + equipment.getId());
+                equipmentService.removeById(equipment.getId());
+            }
+            if (laboratory != null && laboratory.getId() != null) {
+                laboratoryService.removeById(laboratory.getId());
+            }
+            for (User user : users) {
+                if (user.getId() != null) {
+                    userService.removeById(user.getId());
+                }
+            }
+        } finally {
+            container.start();
         }
     }
 
@@ -515,6 +551,24 @@ class ReservationSubmitTest {
         userDTO.setId(user.getId());
         userDTO.setRole(user.getRole());
         UserHolder.saveUser(userDTO);
+    }
+
+    private void stopListenerAndPurgeQueues() {
+        MessageListenerContainer container = reservationListenerContainer();
+        if (container.isRunning()) {
+            container.stop();
+        }
+        rabbitAdmin.purgeQueue(RESERVATION_CREATE_QUEUE, false);
+        rabbitAdmin.purgeQueue(RESERVATION_CREATE_DLQ, false);
+    }
+
+    private MessageListenerContainer reservationListenerContainer() {
+        Iterator<MessageListenerContainer> iterator =
+                listenerEndpointRegistry.getListenerContainers().iterator();
+        if (!iterator.hasNext()) {
+            throw new IllegalStateException("预约消息监听容器不存在");
+        }
+        return iterator.next();
     }
 
     private String quotaKey(Long batchId) {

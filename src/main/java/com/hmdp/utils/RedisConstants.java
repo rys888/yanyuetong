@@ -13,6 +13,7 @@ public class RedisConstants {
     public static final Long CACHE_EQUIPMENT_TTL_JITTER = 5L;
 
     public static final String LOCK_CACHE_KEY = "lock:";
+    public static final String LOCK_RESERVATION_KEY = "lock:reservation:";
 
     public static final String RESERVATION_BATCH_QUOTA_KEY = "reservation:batch:quota:";
     public static final String RESERVATION_BATCH_USERS_KEY = "reservation:batch:users:";

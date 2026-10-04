@@ -4,7 +4,7 @@
 
 ## Current Phase
 
-Phase 6 — Redis + Lua Reservation（Review PASS，**待用户批准提交 / 进入 Phase 7**）
+Phase 7 — RabbitMQ Reservation（Review PASS，**待用户批准提交 / 进入 Phase 8**）
 
 ## Passed
 
@@ -15,6 +15,7 @@ Phase 6 — Redis + Lua Reservation（Review PASS，**待用户批准提交 / �
 - Phase 4 — Equipment Cache ✅（Review PASS，详见 `docs/refactor/PHASE4-REVIEW.md`）
 - Phase 5 — Reservation Batch ✅（Review PASS，详见 `docs/refactor/PHASE5-REVIEW.md`）
 - Phase 6 — Redis + Lua Reservation ✅（Review PASS，详见 `docs/refactor/PHASE6-REVIEW.md`）
+- Phase 7 — RabbitMQ Reservation ✅（Review PASS，详见 `docs/refactor/PHASE7-REVIEW.md`）
 
 ## Current Work
 
@@ -123,9 +124,39 @@ Phase 6 — Redis + Lua Reservation（Review PASS，**待用户批准提交 / �
 - [x] 环境复原：Redis 无残留键；DB 回到基线（batch 0 / equipment 12 / laboratory 4 / user 1013），
       并清理了中途 kill 掉 campaign 所留的一组夹具
 
+### Phase 7（已完成，待提交）
+
+- [x] 拓扑：`reservation.exchange`(direct/durable) + `reservation.create.queue`(durable,
+      `x-dead-letter-exchange=reservation.dlx` + `x-dead-letter-routing-key=reservation.create.dlq`)
+      + `reservation.dlx` + `reservation.create.dlq`；broker 侧逐项实测与设计 §2.1 对齐
+- [x] 生产者：`submit` 抢到名额后发消息，**显式等待 confirm 5s** 并检查 `getReturnedMessage()`
+      —— 字节码复核确认 `doSend` 从不调用 `Future.get`（131 条指令零命中），该等待是承重的；F7b 反向证实
+- [x] 消费者：`ReservationMessageConsumer` 把**整个方法体**包在 `try` 中；三处 `basicNack` 的 requeue **全为 false**
+- [x] **失败模型（字节码复核，非直觉）**：`isRejectManual` 只看顶层 `instanceof`，`shouldRequeue` 却遍历 cause 链
+      —— 二者**不对称**；非致命异常被 `ConditionalRejectingErrorHandler` 静默吞掉 → `rollbackOnExceptionIfNecessary`
+      在 `rejectManual=false` 时**不发任何 ack/nack** → **消息永久 unacked、prefetch=1 下彻底卡死**。
+      故「监听器必须自己捕获一切异常」定为硬约束（设计 §7.6 / 风险 R10）
+- [x] 幂等：先 `selectCount(userId,batchId)` 预检查 → 再条件扣减（`remaining_quota > 0` 守卫）→ 再 INSERT，
+      由 `uk_user_batch` 唯一键兜底
+- [x] 回滚脚本 `reservationRollback.lua`：**`EXISTS` 守卫** —— 名额键存在才 `INCR`（返回 1），
+      缺失则只 `SREM`（返回 0）。防的是「回滚把已关闭批次的名额键复活」（Redis `INCR` 会建键）
+- [x] 持久化 `@Transactional` 与监听器**分属两个 Bean**（规避自调用失效）；UPDATE-then-INSERT 规避「返回值不触发回滚」
+- [x] 测试：`ReservationPersistenceTest` 4 个 + `ReservationMqTest` 10 个；
+      **`mvn test` 90 run / 0 failures / 0 errors / 0 skipped**
+- [x] 独立 Review：**8 组证伪实验**（F1/F2/F3/F5/T4/F6/F7/F7b）→ 抓出 1 处**零判别力**覆盖并返工补测，
+      F6 复测证明补测有效（同一变体：改造前全绿，改造后仅新用例变红）
+- [x] **全量回归抓出 1 个既有测试回归**：异步落库击穿 `ReservationSubmitTest` 四处「MySQL 保持不动」断言
+      （行 208 `expected <4> but was <3>`）。修法为**隔离异步参与者**（夹具停容器 + 清队列）而非改期望值，
+      从而保住「读 Redis vs 读 MySQL」的差值判别力
+- [x] 顺带修复：`ReservationSubmitTest.cleanUp` 不删 `tb_reservation` → 实测跑后残留 **8 行孤儿**
+      （批次已删、行未删，且残留数只有成功提交数的一部分——**该"部分残留"本身就是竞态物证**）；
+      补按 `batchIds` 删除后跑后残留 **0 行**
+- [x] 环境复原：`tb_reservation` 0 / `tb_reservation_batch` 0 / 两个队列均 0-0 / Redis `reservation:*` 与
+      `lock:reservation:*` 均 0；`reservation.lua` 仍为 Phase 6 记录指纹；`pom.xml` 与 `application*.yaml` 未动
+- [x] **生产代码零改动**（返工阶段）：mtime 窗口（窗口内仅两个测试文件）+ 与返工前备份逐字节比对，两条独立证据
+
 ## Pending
 
-- Phase 7 RabbitMQ Reservation
 - Phase 8 Consistency & Reliability
 - Phase 9 Cancellation & Fulfillment
 - Phase 10 Final Cleanup（含凭据外置入库 + 文档明文凭据清理 + 首次 push）
@@ -147,17 +178,30 @@ Phase 6 — Redis + Lua Reservation（Review PASS，**待用户批准提交 / �
       （① 服务层从未验证 Lua `EXISTS` 是撤销方向的权威；② 分页路径的读覆盖零覆盖）
       变体证据：删掉 Lua 的 `EXISTS` 后 15 个服务层用例**全绿**；读覆盖改空实现后只有详情路径变红
       → 详见 `docs/refactor/PHASE6-REVIEW.md` §6
+- [x] **新增** 一处**零判别力**覆盖（Phase 7 变体实验 F3 发现）：`ReservationMqTest` 的幂等用例复用**同一个
+      `reservationId`**，把幂等键从 `(userId,batchId)` 改成 `id` 后 **8/8 全绿** —— 名为"重复消息"，
+      实为"按 id 幂等"。返工补「同 user 同 batch、**不同 reservationId**」用例（判别点是 **DLQ 必须为空**：
+      按 id 的实现会撞 `uk_user_batch` → 抛异常 → nack → 进 DLQ），F6 复测仅该用例变红
+      → 详见 `docs/refactor/PHASE7-REVIEW.md` §5 / §7
+- [x] **新增** Phase 7 异步落库引发的**既有测试回归**：`ReservationSubmitTest` 四处断言 MySQL 未被扣减，
+      而异步消费者会扣减 → 断言依赖消费者时序（全量 88 run 挂 1 个，单类跑可能全绿，天然 flaky）。
+      已修（夹具隔离，断言本身未动），并清除实测的 **8 行** `tb_reservation` 孤儿
+      → 详见 `docs/refactor/PHASE7-REVIEW.md` §6
 
 ### P1（业务/一致性缺陷，后续 Phase 处理）
 
 1. 订单表无任何唯一索引 → Phase 8
 2. 消费端扣库存 + INSERT 无事务 → Phase 8
 3. Confirm Timeout 立即回滚 Redis → Phase 8
+   （**Phase 7 已把该行为落地**在 `publishReservationMessage`：5s 未确认即回滚名额并抛 503。因此这条从
+   "待实现的设计" 变为 "**已实现的已知缺口**"：若 confirm 超时但消息实际已投递并被消费，会出现
+   「Redis 名额已归还、MySQL 已有预约行」的**反向漂移**。与 P1-2 同属 Phase 8 的一致性对账范围）
 4. 补偿 Lua 不幂等 → Phase 8
 5. ~~Lua 不校验预约时间窗口~~ → **已于 Phase 6 关闭**（`reservation.lua` 已实现窗口校验，返回码 4/5）。
    注意其**可达性**见 `PHASE6-REVIEW.md` §4.3：Java 用同一个 `now` 先判，故当前 Lua 的窗口守卫是被遮蔽的冗余（保留）
 6. DLQ 无治理入口 → Phase 8
-7. MQ 直接发送数据库 Entity → Phase 7
+7. ~~MQ 直接发送数据库 Entity~~ → **已于 Phase 7 关闭**：改为发送 `ReservationMessageDTO`（`Serializable`），
+   不发送实体，避免把表结构耦合进消息契约
 8. ~~`CacheClient.queryWithMutex` 互斥失效~~ → **已于 Phase 4 修复**（见「已解决」）
 9. ~~**LAB_ADMIN 无实验室归属约束**：任何 LAB_ADMIN 可管理任意实验室与设备（计划 §6 称"管理自己负责的实验室"）~~
    → **已于 Phase 5.1 修复**（见「已解决」）
@@ -218,7 +262,12 @@ Phase 6 — Redis + Lua Reservation（Review PASS，**待用户批准提交 / �
 
 ## Last Review
 
-Phase 6 Review — PASS — 2026-10-04，详见 `docs/refactor/PHASE6-REVIEW.md`
+Phase 7 Review — PASS — 2026-10-05，详见 `docs/refactor/PHASE7-REVIEW.md`
+（含 8 组证伪实验与一轮返工闭环；对 Spring AMQP 2.2.18 的 ack/nack 失败模型做了字节码级复核。
+核心数字：返工前全量 **88 run / 1 failure**（既有测试被异步语义击穿）、`tb_reservation` 跑后残留 **8 行**；
+返工后 **90 run / 0 failures / 0 errors**、残留 **0 行**。生产代码零改动经 mtime 窗口与逐字节比对双重证实）
+
+上一轮：Phase 6 Review — PASS — 2026-10-04，详见 `docs/refactor/PHASE6-REVIEW.md`
 （含 13 组变体 + 3 组窗口可达性实验；抓出并关闭 2 处服务层覆盖空洞后，用同一实验复验通过。
 核心数字：把原子脚本换成两段式实现 → 20 并发抢 5 名额 **9 人成功**；同一用户 20 并发 **13 次成功**）
 
