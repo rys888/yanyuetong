@@ -1,6 +1,7 @@
 package com.hmdp.config;
 
 import com.hmdp.dto.Result;
+import com.hmdp.exception.BadRequestException;
 import com.hmdp.exception.ForbiddenException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,13 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 @Slf4j
 @RestControllerAdvice
 public class WebExceptionAdvice {
+
+    @ExceptionHandler(BadRequestException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result handleBadRequest(BadRequestException e) {
+        log.warn("请求不合法：{}", e.getMessage());
+        return Result.fail(e.getMessage());
+    }
 
     @ExceptionHandler(ForbiddenException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
