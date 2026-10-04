@@ -46,21 +46,20 @@ public class LaboratoryController {
     @PostMapping
     @RequireRole(UserRole.LAB_ADMIN)
     public Result saveLaboratory(@RequestBody Laboratory laboratory) {
-        laboratoryService.save(laboratory);
-        return Result.ok(laboratory.getId());
+        return Result.ok(laboratoryService.saveLaboratory(laboratory));
     }
 
     @PutMapping
     @RequireRole(UserRole.LAB_ADMIN)
     public Result updateLaboratory(@RequestBody Laboratory laboratory) {
-        laboratoryService.updateById(laboratory);
+        laboratoryService.updateLaboratory(laboratory);
         return Result.ok();
     }
 
     @DeleteMapping("/{id}")
     @RequireRole(UserRole.LAB_ADMIN)
     public Result deleteLaboratory(@PathVariable("id") Long id) {
-        laboratoryService.removeById(id);
+        laboratoryService.deleteLaboratory(id);
         return Result.ok();
     }
 }

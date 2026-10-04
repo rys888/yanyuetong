@@ -1,9 +1,17 @@
 package com.hmdp;
 
+import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Equipment;
+import com.hmdp.entity.Laboratory;
+import com.hmdp.entity.User;
 import com.hmdp.enums.EquipmentStatus;
+import com.hmdp.enums.LaboratoryStatus;
+import com.hmdp.enums.UserRole;
 import com.hmdp.mapper.EquipmentMapper;
+import com.hmdp.mapper.LaboratoryMapper;
+import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IEquipmentService;
+import com.hmdp.utils.UserHolder;
 import com.hmdp.vo.EquipmentVO;
 import org.apache.ibatis.executor.Executor;
 import org.apache.ibatis.mapping.MappedStatement;
@@ -50,15 +58,49 @@ class EquipmentCacheTest {
     private EquipmentMapper equipmentMapper;
 
     @Resource
+    private LaboratoryMapper laboratoryMapper;
+
+    @Resource
+    private UserMapper userMapper;
+
+    @Resource
     private EquipmentSelectCounter equipmentSelectCounter;
 
+    private User admin;
+    private Laboratory laboratory;
     private Long equipmentId;
     private Long missingEquipmentId;
 
     @BeforeEach
     void setUp() {
+        UserHolder.removeUser();
+        String phone = "19"
+                + String.format("%08d", Math.abs(System.nanoTime() % 100_000_000L))
+                + "1";
+        admin = new User()
+                .setPhone(phone)
+                .setNickName("缓存测试管理员")
+                .setIcon("")
+                .setRole(UserRole.LAB_ADMIN);
+        assertEquals(1, userMapper.insert(admin));
+
+        laboratory = new Laboratory()
+                .setName("缓存测试实验室-" + System.nanoTime())
+                .setCampus("测试校区")
+                .setBuilding("测试楼")
+                .setRoom("C101")
+                .setDescription("设备缓存自动化测试")
+                .setStatus(LaboratoryStatus.OPEN)
+                .setAdminUserId(admin.getId());
+        assertEquals(1, laboratoryMapper.insert(laboratory));
+
+        UserDTO userDTO = new UserDTO();
+        userDTO.setId(admin.getId());
+        userDTO.setRole(UserRole.LAB_ADMIN);
+        UserHolder.saveUser(userDTO);
+
         Equipment equipment = new Equipment()
-                .setLaboratoryId(1L)
+                .setLaboratoryId(laboratory.getId())
                 .setCategoryId(1L)
                 .setName("缓存测试设备-" + System.nanoTime())
                 .setDescription("设备详情缓存测试")
@@ -87,6 +129,13 @@ class EquipmentCacheTest {
         if (missingEquipmentId != null) {
             stringRedisTemplate.delete(CACHE_EQUIPMENT_KEY + missingEquipmentId);
             stringRedisTemplate.delete("lock:" + CACHE_EQUIPMENT_KEY + missingEquipmentId);
+        }
+        UserHolder.removeUser();
+        if (laboratory != null && laboratory.getId() != null) {
+            laboratoryMapper.deleteById(laboratory.getId());
+        }
+        if (admin != null && admin.getId() != null) {
+            userMapper.deleteById(admin.getId());
         }
     }
 

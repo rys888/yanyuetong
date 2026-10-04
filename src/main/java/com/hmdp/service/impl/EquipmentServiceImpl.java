@@ -10,6 +10,7 @@ import com.hmdp.entity.Equipment;
 import com.hmdp.entity.EquipmentCategory;
 import com.hmdp.entity.Laboratory;
 import com.hmdp.enums.EquipmentStatus;
+import com.hmdp.exception.ForbiddenException;
 import com.hmdp.mapper.EquipmentMapper;
 import com.hmdp.service.IEquipmentCategoryService;
 import com.hmdp.service.IEquipmentService;
@@ -62,26 +63,44 @@ public class EquipmentServiceImpl extends ServiceImpl<EquipmentMapper, Equipment
 
     @Override
     public Long saveEquipment(Equipment equipment) {
+        laboratoryService.assertManageable(equipment.getLaboratoryId());
         save(equipment);
         return equipment.getId();
     }
 
     @Override
     public void updateEquipment(Equipment equipment) {
+        Equipment existing = getById(equipment.getId());
+        assertEquipmentManageable(existing);
+        // 禁止把设备"搬"进别人的实验室
+        if (equipment.getLaboratoryId() != null
+                && !equipment.getLaboratoryId().equals(existing.getLaboratoryId())) {
+            laboratoryService.assertManageable(equipment.getLaboratoryId());
+        }
         updateById(equipment);
         deleteEquipmentCache(equipment.getId());
     }
 
     @Override
     public void updateEquipmentStatus(Long id, EquipmentStatus status) {
+        assertEquipmentManageable(getById(id));
         updateById(new Equipment().setId(id).setStatus(status));
         deleteEquipmentCache(id);
     }
 
     @Override
     public void deleteEquipment(Long id) {
+        assertEquipmentManageable(getById(id));
         removeById(id);
         deleteEquipmentCache(id);
+    }
+
+    /** 设备不存在与不归当前用户管，统一按无权处理（不区分，避免泄露存在性） */
+    private void assertEquipmentManageable(Equipment existing) {
+        if (existing == null) {
+            throw new ForbiddenException("无权管理该设备");
+        }
+        laboratoryService.assertManageable(existing.getLaboratoryId());
     }
 
     private EquipmentVO queryEquipmentByIdFromDb(Long id) {
