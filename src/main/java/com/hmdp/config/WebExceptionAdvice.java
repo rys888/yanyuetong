@@ -3,6 +3,7 @@ package com.hmdp.config;
 import com.hmdp.dto.Result;
 import com.hmdp.exception.BadRequestException;
 import com.hmdp.exception.ForbiddenException;
+import com.hmdp.exception.ServiceUnavailableException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -24,6 +25,13 @@ public class WebExceptionAdvice {
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public Result handleForbidden(ForbiddenException e) {
         log.warn("归属校验未通过：{}", e.getMessage());
+        return Result.fail(e.getMessage());
+    }
+
+    @ExceptionHandler(ServiceUnavailableException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public Result handleServiceUnavailable(ServiceUnavailableException e) {
+        log.warn("服务暂时不可用：{}", e.getMessage());
         return Result.fail(e.getMessage());
     }
 
