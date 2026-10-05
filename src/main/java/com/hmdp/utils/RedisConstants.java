@@ -14,6 +14,7 @@ public class RedisConstants {
 
     public static final String LOCK_CACHE_KEY = "lock:";
     public static final String LOCK_RESERVATION_KEY = "lock:reservation:";
+    public static final String LOCK_RESERVATION_RECONCILE_KEY = "lock:reservation:reconcile";
 
     public static final String RESERVATION_BATCH_QUOTA_KEY = "reservation:batch:quota:";
     public static final String RESERVATION_BATCH_USERS_KEY = "reservation:batch:users:";

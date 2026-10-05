@@ -28,7 +28,9 @@ public class ReservationQuotaRollbackExecutor {
     }
 
     /**
-     * 返回 1 表示名额已归还；返回 0 表示名额键已不存在，仅清理用户标记。
+     * 返回 0 表示用户本来就未占用名额（重复补偿或从未占用），名额不变；
+     * 返回 1 表示用户确实占用名额且名额键存在，已归还一个名额；
+     * 返回 2 表示用户确实占用名额但名额键已不存在，仅清理用户标记、不归还名额。
      */
     public int rollback(Long batchId, Long userId) {
         String quotaKey = RESERVATION_BATCH_QUOTA_KEY + batchId;
@@ -37,7 +39,7 @@ public class ReservationQuotaRollbackExecutor {
                 RESERVATION_ROLLBACK_SCRIPT,
                 Arrays.asList(quotaKey, usersKey),
                 userId.toString());
-        if (result == null || (result != 0L && result != 1L)) {
+        if (result == null || (result != 0L && result != 1L && result != 2L)) {
             throw new IllegalStateException("预约名额回滚脚本返回异常：" + result);
         }
         return result.intValue();

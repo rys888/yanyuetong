@@ -20,6 +20,13 @@ import org.springframework.dao.DuplicateKeyException;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -50,6 +57,8 @@ class ReservationPersistenceTest {
     private User user;
     private ReservationBatch batch;
     private long reservationIdSeed;
+    private final List<Long> additionalUserIds = new ArrayList<>();
+    private final List<Long> additionalBatchIds = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -80,6 +89,14 @@ class ReservationPersistenceTest {
     @AfterEach
     void cleanUp() {
         UserHolder.removeUser();
+        for (Long batchId : additionalBatchIds) {
+            reservationMapper.delete(new LambdaQueryWrapper<Reservation>()
+                    .eq(Reservation::getBatchId, batchId));
+            batchService.removeById(batchId);
+        }
+        for (Long userId : additionalUserIds) {
+            userService.removeById(userId);
+        }
         if (user != null && user.getId() != null && batch != null && batch.getId() != null) {
             reservationMapper.delete(new LambdaQueryWrapper<Reservation>()
                     .eq(Reservation::getUserId, user.getId())
@@ -148,6 +165,81 @@ class ReservationPersistenceTest {
                 () -> reservationMapper.insert(reservation(reservationIdSeed + 1)));
 
         assertEquals(1, countFixtureReservations());
+    }
+
+    @Test
+    void shouldNeverMakeRemainingQuotaNegativeUnderConcurrentPersist() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        ReservationBatch concurrentBatch = new ReservationBatch()
+                .setEquipmentId(1L)
+                .setStartTime(now.plusDays(3))
+                .setEndTime(now.plusDays(3).plusHours(2))
+                .setBookingStartTime(now.minusHours(1))
+                .setBookingEndTime(now.plusDays(1))
+                .setTotalQuota(1)
+                .setRemainingQuota(1)
+                .setStatus(ReservationBatchStatus.PUBLISHED);
+        assertTrue(batchService.save(concurrentBatch));
+        additionalBatchIds.add(concurrentBatch.getId());
+
+        int attempts = 8;
+        String suffix = String.format("%08d", Math.abs(System.nanoTime() % 100_000_000L));
+        List<User> competitors = new ArrayList<>();
+        for (int i = 0; i < attempts; i++) {
+            User competitor = new User()
+                    .setPhone("16" + suffix + i)
+                    .setNickName("持久化并发测试用户-" + suffix + "-" + i)
+                    .setIcon("")
+                    .setRole(UserRole.USER);
+            assertTrue(userService.save(competitor));
+            additionalUserIds.add(competitor.getId());
+            competitors.add(competitor);
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(attempts);
+        CountDownLatch ready = new CountDownLatch(attempts);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<ReservationPersistResult>> futures = new ArrayList<>();
+
+        try {
+            for (int i = 0; i < attempts; i++) {
+                Reservation concurrentReservation = new Reservation()
+                        .setId(reservationIdSeed + i)
+                        .setUserId(competitors.get(i).getId())
+                        .setBatchId(concurrentBatch.getId())
+                        .setCreateTime(LocalDateTime.now());
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return persistenceService.persist(concurrentReservation);
+                }));
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS));
+            start.countDown();
+
+            int persisted = 0;
+            int quotaConflicts = 0;
+            for (Future<ReservationPersistResult> future : futures) {
+                ReservationPersistResult result = future.get(15, TimeUnit.SECONDS);
+                if (result == ReservationPersistResult.PERSISTED) {
+                    persisted++;
+                } else if (result == ReservationPersistResult.QUOTA_CONFLICT) {
+                    quotaConflicts++;
+                }
+            }
+
+            assertEquals(1, persisted);
+            assertEquals(attempts - 1, quotaConflicts);
+            assertEquals(1, reservationMapper.selectCount(new LambdaQueryWrapper<Reservation>()
+                    .eq(Reservation::getBatchId, concurrentBatch.getId())));
+            Integer remainingQuota = batchService.getById(concurrentBatch.getId()).getRemainingQuota();
+            assertEquals(Integer.valueOf(0), remainingQuota);
+            // 显式守住 I5：并发条件扣减无论如何都不能让 MySQL remaining_quota 变成负数。
+            assertTrue(remainingQuota >= 0);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
     }
 
     private Reservation reservation(long id) {
