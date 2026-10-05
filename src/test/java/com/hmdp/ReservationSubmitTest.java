@@ -8,6 +8,7 @@ import com.hmdp.entity.Equipment;
 import com.hmdp.entity.Laboratory;
 import com.hmdp.entity.Reservation;
 import com.hmdp.entity.ReservationBatch;
+import com.hmdp.entity.ReservationRequest;
 import com.hmdp.entity.User;
 import com.hmdp.enums.EquipmentStatus;
 import com.hmdp.enums.LaboratoryStatus;
@@ -16,6 +17,7 @@ import com.hmdp.enums.UserRole;
 import com.hmdp.exception.BadRequestException;
 import com.hmdp.exception.ForbiddenException;
 import com.hmdp.mapper.ReservationMapper;
+import com.hmdp.mapper.ReservationRequestMapper;
 import com.hmdp.service.IEquipmentService;
 import com.hmdp.service.ILaboratoryService;
 import com.hmdp.service.IReservationBatchService;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -37,7 +40,6 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -85,6 +87,9 @@ class ReservationSubmitTest {
     private ReservationMapper reservationMapper;
 
     @Resource
+    private ReservationRequestMapper reservationRequestMapper;
+
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
 
     @Resource
@@ -101,6 +106,7 @@ class ReservationSubmitTest {
     private User user2;
     private Laboratory laboratory;
     private Equipment equipment;
+    private boolean reservationListenerWasRunning;
 
     @BeforeEach
     void setUp() {
@@ -127,6 +133,8 @@ class ReservationSubmitTest {
             if (!batchIds.isEmpty()) {
                 reservationMapper.delete(new LambdaQueryWrapper<Reservation>()
                         .in(Reservation::getBatchId, batchIds));
+                reservationRequestMapper.delete(new LambdaQueryWrapper<ReservationRequest>()
+                        .in(ReservationRequest::getBatchId, batchIds));
             }
             for (Long batchId : batchIds) {
                 stringRedisTemplate.delete(Arrays.asList(quotaKey(batchId), usersKey(batchId)));
@@ -145,7 +153,9 @@ class ReservationSubmitTest {
                 }
             }
         } finally {
-            container.start();
+            if (reservationListenerWasRunning) {
+                container.start();
+            }
         }
     }
 
@@ -555,7 +565,8 @@ class ReservationSubmitTest {
 
     private void stopListenerAndPurgeQueues() {
         MessageListenerContainer container = reservationListenerContainer();
-        if (container.isRunning()) {
+        reservationListenerWasRunning = container.isRunning();
+        if (reservationListenerWasRunning) {
             container.stop();
         }
         rabbitAdmin.purgeQueue(RESERVATION_CREATE_QUEUE, false);
@@ -563,12 +574,15 @@ class ReservationSubmitTest {
     }
 
     private MessageListenerContainer reservationListenerContainer() {
-        Iterator<MessageListenerContainer> iterator =
-                listenerEndpointRegistry.getListenerContainers().iterator();
-        if (!iterator.hasNext()) {
-            throw new IllegalStateException("预约消息监听容器不存在");
+        // T7 起存在创建队列与 DLQ 两个监听器，必须按队列名选择，不能依赖容器集合的迭代顺序。
+        for (MessageListenerContainer container : listenerEndpointRegistry.getListenerContainers()) {
+            if (container instanceof AbstractMessageListenerContainer
+                    && Arrays.asList(((AbstractMessageListenerContainer) container)
+                    .getQueueNames()).contains(RESERVATION_CREATE_QUEUE)) {
+                return container;
+            }
         }
-        return iterator.next();
+        throw new IllegalStateException("消息监听容器不存在：" + RESERVATION_CREATE_QUEUE);
     }
 
     private String quotaKey(Long batchId) {

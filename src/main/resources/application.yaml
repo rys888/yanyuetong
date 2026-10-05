@@ -46,3 +46,9 @@ logging:
     com.hmdp: debug
   pattern:
     dateformat: mm:ss.SSS
+hmdp:
+  reservation:
+    reconcile-interval-ms: 300000
+    reconcile-threshold-ms: 600000
+    reconcile-limit: 200
+    dlq-max-replay: 3
