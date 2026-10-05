@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.hmdp.mapper.ReservationMapper">
+
+    <sql id="reservationColumns">
+        r.id, r.user_id, r.batch_id, r.status, r.quota_released,
+        r.create_time, r.update_time,
+        e.name AS equipment_name, l.name AS laboratory_name,
+        b.start_time, b.end_time, b.booking_start_time, b.booking_end_time
+    </sql>
+
+    <select id="selectReservationDetailById" resultType="com.hmdp.vo.ReservationVO">
+        SELECT <include refid="reservationColumns"/>
+        FROM tb_reservation r
+        LEFT JOIN tb_reservation_batch b ON r.batch_id = b.id
+        LEFT JOIN tb_equipment e ON b.equipment_id = e.id
+        LEFT JOIN tb_laboratory l ON e.laboratory_id = l.id
+        WHERE r.id = #{id}
+    </select>
+
+    <select id="selectReservationPage" resultType="com.hmdp.vo.ReservationVO">
+        SELECT <include refid="reservationColumns"/>
+        FROM tb_reservation r
+        LEFT JOIN tb_reservation_batch b ON r.batch_id = b.id
+        LEFT JOIN tb_equipment e ON b.equipment_id = e.id
+        LEFT JOIN tb_laboratory l ON e.laboratory_id = l.id
+        <where>
+            <if test="q.batchId != null">
+                AND r.batch_id = #{q.batchId}
+            </if>
+            <if test="q.status != null">
+                AND r.status = #{q.status}
+            </if>
+            <if test="userId != null">
+                AND r.user_id = #{userId}
+            </if>
+            <if test="adminUserId != null">
+                AND l.admin_user_id = #{adminUserId}
+            </if>
+        </where>
+        ORDER BY r.id DESC
+    </select>
+
+    <select id="selectPendingQuotaReleases" resultType="com.hmdp.entity.Reservation">
+        SELECT r.id, r.user_id, r.batch_id, r.status, r.quota_released,
+               r.create_time, r.update_time
+        FROM tb_reservation r
+        WHERE r.status = 'CANCELLED' AND r.quota_released = 0
+        ORDER BY r.update_time ASC, r.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markNoShows">
+        UPDATE tb_reservation
+        SET status = 'NO_SHOW'
+        WHERE id IN (
+            SELECT id
+            FROM (
+                SELECT r.id
+                FROM tb_reservation r
+                JOIN tb_reservation_batch b ON r.batch_id = b.id
+                WHERE r.status = 'RESERVED'
+                  AND b.end_time &lt; #{now}
+                  AND b.status &lt;&gt; 'CANCELLED'
+                LIMIT #{limit}
+            ) eligible
+        )
+    </update>
+</mapper>

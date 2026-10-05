@@ -3,6 +3,7 @@ package com.hmdp.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.hmdp.enums.ReservationStatus;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -24,6 +25,10 @@ public class Reservation implements Serializable {
     private Long userId;
 
     private Long batchId;
+
+    private ReservationStatus status;
+
+    private Boolean quotaReleased;
 
     private LocalDateTime createTime;
 

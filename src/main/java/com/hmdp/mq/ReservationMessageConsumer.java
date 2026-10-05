@@ -5,6 +5,7 @@ import com.hmdp.entity.Reservation;
 import com.hmdp.entity.ReservationRequest;
 import com.hmdp.enums.ReservationPersistResult;
 import com.hmdp.enums.ReservationRequestStatus;
+import com.hmdp.enums.ReservationStatus;
 import com.hmdp.service.IReservationPersistenceService;
 import com.hmdp.service.IReservationRequestService;
 import com.hmdp.utils.RedisConstants;
@@ -136,6 +137,7 @@ public class ReservationMessageConsumer {
                     .setId(messageDTO.getReservationId())
                     .setUserId(messageDTO.getUserId())
                     .setBatchId(messageDTO.getBatchId())
+                    .setStatus(ReservationStatus.RESERVED)
                     .setCreateTime(messageDTO.getCreateTime());
             return reservationPersistenceService.persist(reservation);
         } finally {

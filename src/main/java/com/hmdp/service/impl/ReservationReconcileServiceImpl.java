@@ -1,6 +1,8 @@
 package com.hmdp.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.hmdp.dto.ReconcileSummaryDTO;
+import com.hmdp.entity.Reservation;
 import com.hmdp.entity.ReservationRequest;
 import com.hmdp.enums.ReservationRequestStatus;
 import com.hmdp.mapper.ReservationMapper;
@@ -51,7 +53,9 @@ public class ReservationReconcileServiceImpl implements IReservationReconcileSer
     /**
      * 定时调度薄壳：分布式锁仅减少多实例重复工作，正确性仍由状态 CAS 与幂等补偿保证。
      */
-    @Scheduled(fixedDelayString = "${hmdp.reservation.reconcile-interval-ms:300000}")
+    @Scheduled(
+            fixedDelayString = "${hmdp.reservation.reconcile-interval-ms:300000}",
+            initialDelayString = "${hmdp.reservation.reconcile-initial-delay-ms:300000}")
     public void scheduledReconcile() {
         RLock lock = redissonClient.getLock(RedisConstants.LOCK_RESERVATION_RECONCILE_KEY);
         boolean locked;
@@ -70,11 +74,16 @@ public class ReservationReconcileServiceImpl implements IReservationReconcileSer
             ReconcileSummaryDTO summary = reconcile(reconcileLimit);
             if (summary.getScanned() == 0) {
                 log.debug("预约对账本轮无陈旧请求");
-                return;
+            } else {
+                log.info("预约对账完成：scanned={}，confirmed={}，compensated={}，skipped={}，failed={}",
+                        summary.getScanned(), summary.getConfirmed(), summary.getCompensated(),
+                        summary.getSkipped(), summary.getFailed());
             }
-            log.info("预约对账完成：scanned={}，confirmed={}，compensated={}，skipped={}，failed={}",
-                    summary.getScanned(), summary.getConfirmed(), summary.getCompensated(),
-                    summary.getSkipped(), summary.getFailed());
+            int released = releasePendingQuotas(reconcileLimit);
+            int noShows = markNoShows(reconcileLimit);
+            if (released > 0 || noShows > 0) {
+                log.info("预约生命周期补偿完成：releasedQuotas={}，noShows={}", released, noShows);
+            }
         } finally {
             if (lock.isHeldByCurrentThread()) {
                 lock.unlock();
@@ -132,5 +141,43 @@ public class ReservationReconcileServiceImpl implements IReservationReconcileSer
 
         return new ReconcileSummaryDTO(
                 staleRequests.size(), confirmed, compensated, skipped, failed);
+    }
+
+    /**
+     * 重试取消时未成功的 Redis 名额归还。返回本轮完成处理的条数。
+     */
+    public int releasePendingQuotas(int limit) {
+        if (limit <= 0) {
+            return 0;
+        }
+        List<Reservation> pending = reservationMapper.selectPendingQuotaReleases(limit);
+        int released = 0;
+        for (Reservation reservation : pending) {
+            try {
+                rollbackExecutor.rollback(reservation.getBatchId(), reservation.getUserId());
+                int updated = reservationMapper.update(null,
+                        new LambdaUpdateWrapper<Reservation>()
+                                .eq(Reservation::getId, reservation.getId())
+                                .eq(Reservation::getQuotaReleased, false)
+                                .set(Reservation::getQuotaReleased, true));
+                if (updated == 1) {
+                    released++;
+                }
+            } catch (Exception e) {
+                log.error("取消预约 Redis 名额补偿失败：reservationId={}，batchId={}，userId={}",
+                        reservation.getId(), reservation.getBatchId(), reservation.getUserId(), e);
+            }
+        }
+        return released;
+    }
+
+    /**
+     * 批次已结束且仍未核验的预约置为爽约。爽约不归还任何名额。
+     */
+    public int markNoShows(int limit) {
+        if (limit <= 0) {
+            return 0;
+        }
+        return reservationMapper.markNoShows(LocalDateTime.now(), limit);
     }
 }
