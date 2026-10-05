@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.hmdp.entity.Reservation;
 import com.hmdp.entity.ReservationBatch;
 import com.hmdp.enums.ReservationPersistResult;
+import com.hmdp.enums.ReservationStatus;
 import com.hmdp.mapper.ReservationMapper;
 import com.hmdp.service.IReservationBatchService;
 import com.hmdp.service.IReservationPersistenceService;
@@ -25,10 +26,21 @@ public class ReservationPersistenceServiceImpl implements IReservationPersistenc
     @Override
     @Transactional
     public ReservationPersistResult persist(Reservation reservation) {
+        Reservation existing = reservationMapper.selectById(reservation.getId());
+        if (existing != null
+                && existing.getUserId().equals(reservation.getUserId())
+                && existing.getBatchId().equals(reservation.getBatchId())) {
+            // 只有「同 id 且同 user 且同 batch」才算同一次预约的重复投递（含 DLQ 重放），
+            // 幂等确认、不重复扣名额。同 id 但归属不同是异常的主键冲突，必须继续走到
+            // insert 由主键约束抛出，交给消费端既有的 catch(DuplicateKeyException) 进死信队列；
+            // 若在此提前返回 DUPLICATE，那条未落库的消息会被静默 ACK，DLQ 上不留任何痕迹。
+            return ReservationPersistResult.DUPLICATE;
+        }
         Integer existingCount = reservationMapper.selectCount(
                 new LambdaQueryWrapper<Reservation>()
                         .eq(Reservation::getUserId, reservation.getUserId())
-                        .eq(Reservation::getBatchId, reservation.getBatchId()));
+                        .eq(Reservation::getBatchId, reservation.getBatchId())
+                        .in(Reservation::getStatus, ReservationStatus.occupyingStatuses()));
         if (existingCount > 0) {
             return ReservationPersistResult.DUPLICATE;
         }

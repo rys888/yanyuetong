@@ -1,12 +1,18 @@
 package com.hmdp.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.config.RabbitMQConfig;
+import com.hmdp.dto.ReservationQueryDTO;
 import com.hmdp.entity.Equipment;
+import com.hmdp.entity.Reservation;
 import com.hmdp.entity.ReservationBatch;
 import com.hmdp.entity.ReservationRequest;
 import com.hmdp.enums.EquipmentStatus;
 import com.hmdp.enums.ReservationBatchStatus;
+import com.hmdp.enums.ReservationCancelOutcome;
 import com.hmdp.enums.ReservationRequestStatus;
 import com.hmdp.enums.ReservationResultCode;
 import com.hmdp.exception.BadRequestException;
@@ -14,13 +20,18 @@ import com.hmdp.exception.ForbiddenException;
 import com.hmdp.exception.ServiceUnavailableException;
 import com.hmdp.mq.ReservationMessageDTO;
 import com.hmdp.service.IEquipmentService;
+import com.hmdp.service.ILaboratoryService;
 import com.hmdp.service.IReservationBatchService;
+import com.hmdp.service.IReservationLifecycleService;
 import com.hmdp.service.IReservationRequestService;
 import com.hmdp.service.IReservationService;
+import com.hmdp.mapper.ReservationMapper;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.ReservationQuotaExecutor;
 import com.hmdp.utils.ReservationQuotaRollbackExecutor;
+import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
+import com.hmdp.vo.ReservationVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpConnectException;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
@@ -52,6 +63,15 @@ public class ReservationServiceImpl implements IReservationService {
 
     @Resource
     private IReservationRequestService reservationRequestService;
+
+    @Resource
+    private IReservationLifecycleService reservationLifecycleService;
+
+    @Resource
+    private ReservationMapper reservationMapper;
+
+    @Resource
+    private ILaboratoryService laboratoryService;
 
     @Resource
     private RabbitTemplate rabbitTemplate;
@@ -115,6 +135,102 @@ public class ReservationServiceImpl implements IReservationService {
         }
         publishReservationMessage(reservationId, user.getId(), batchId, now);
         return reservationId;
+    }
+
+    @Override
+    public void cancel(Long reservationId) {
+        UserDTO user = requireUser("无权取消该预约");
+        Reservation reservation = reservationMapper.selectById(reservationId);
+        ReservationCancelOutcome outcome = reservationLifecycleService.cancel(
+                reservationId, user.getId(), LocalDateTime.now());
+        if (outcome == ReservationCancelOutcome.NOT_FOUND) {
+            throw new ForbiddenException("无权取消该预约");
+        }
+        if (outcome == ReservationCancelOutcome.NOT_CANCELLABLE) {
+            throw new BadRequestException("当前状态不可取消");
+        }
+        if (outcome != ReservationCancelOutcome.TRANSITIONED) {
+            // ALREADY_CANCELLED：本次调用没有发生 RESERVED→CANCELLED 的状态跃迁，幂等返回。
+            // 绝不能在此路径触碰 Redis 或 quota_released：rollback 的 Lua 虽然自身幂等，
+            // 但用户可能在取消 R1 之后重新预约得到 R2，此时对 R1 的重复取消会 SREM 掉
+            // R2 在 Redis 中的占位标记 —— Redis 多出名额而 MySQL 仍占用 R2，既超卖又
+            // 重新打开名额泄漏（再次抢名额会在落库时被唯一键拒成 DUPLICATE 并静默 ACK）。
+            // 只有本事务真正完成跃迁（TRANSITIONED）才允许归还名额。
+            return;
+        }
+
+        try {
+            int rollbackCode = reservationQuotaRollbackExecutor.rollback(
+                    reservation.getBatchId(), user.getId());
+            reservationMapper.update(null,
+                    new LambdaUpdateWrapper<Reservation>()
+                            .eq(Reservation::getId, reservationId)
+                            .eq(Reservation::getQuotaReleased, false)
+                            .set(Reservation::getQuotaReleased, true));
+            log.info("取消预约后 Redis 名额归还完成：reservationId={}，rollbackCode={}",
+                    reservationId, rollbackCode);
+        } catch (RuntimeException e) {
+            log.error("取消预约后 Redis 名额归还失败，等待定时补偿：reservationId={}，batchId={}，userId={}",
+                    reservationId, reservation.getBatchId(), user.getId(), e);
+        }
+    }
+
+    @Override
+    public void verify(Long reservationId) {
+        requireUser("无权核验该预约");
+        Reservation reservation = reservationMapper.selectById(reservationId);
+        if (reservation == null) {
+            throw new ForbiddenException("无权核验该预约");
+        }
+        ReservationBatch batch = reservationBatchService.getById(reservation.getBatchId());
+        if (batch == null) {
+            throw new ForbiddenException("无权核验该预约");
+        }
+        Equipment equipment = equipmentService.getById(batch.getEquipmentId());
+        if (equipment == null) {
+            throw new ForbiddenException("无权核验该预约");
+        }
+        laboratoryService.assertManageable(equipment.getLaboratoryId());
+        reservationLifecycleService.complete(reservationId, LocalDateTime.now());
+    }
+
+    @Override
+    public IPage<ReservationVO> queryMyPage(ReservationQueryDTO query) {
+        UserDTO user = requireUser("无权查看该预约");
+        ReservationQueryDTO actualQuery = query == null ? new ReservationQueryDTO() : query;
+        return queryPage(actualQuery, user.getId(), null);
+    }
+
+    @Override
+    public ReservationVO queryMine(Long reservationId) {
+        UserDTO user = requireUser("无权查看该预约");
+        ReservationVO reservation = reservationMapper.selectReservationDetailById(reservationId);
+        if (reservation == null || !user.getId().equals(reservation.getUserId())) {
+            throw new ForbiddenException("无权查看该预约");
+        }
+        return reservation;
+    }
+
+    @Override
+    public IPage<ReservationVO> queryManagePage(ReservationQueryDTO query) {
+        UserDTO user = requireUser("无权查看管理端预约");
+        ReservationQueryDTO actualQuery = query == null ? new ReservationQueryDTO() : query;
+        return queryPage(actualQuery, null, user.getId());
+    }
+
+    private IPage<ReservationVO> queryPage(
+            ReservationQueryDTO query, Long userId, Long adminUserId) {
+        Integer current = query.getCurrent() == null ? 1 : query.getCurrent();
+        Page<ReservationVO> page = new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE);
+        return reservationMapper.selectReservationPage(page, query, userId, adminUserId);
+    }
+
+    private UserDTO requireUser(String message) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            throw new ForbiddenException(message);
+        }
+        return user;
     }
 
     private void publishReservationMessage(
