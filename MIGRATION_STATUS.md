@@ -17,7 +17,7 @@ Phase 8 — Consistency & Reliability（**T1–T8 全部完成**；**阶段六/�
 - Phase 5 — Reservation Batch ✅（Review PASS，详见 `docs/refactor/PHASE5-REVIEW.md`）
 - Phase 6 — Redis + Lua Reservation ✅（Review PASS，详见 `docs/refactor/PHASE6-REVIEW.md`）
 - Phase 7 — RabbitMQ Reservation ✅（Review PASS，详见 `docs/refactor/PHASE7-REVIEW.md`；本地提交 `02daa19`）
-- Phase 8 — Consistency & Reliability ✅（Review PASS，详见 `docs/refactor/PHASE8-REVIEW.md`；本地提交 `18fae51`）
+- Phase 8 — Consistency & Reliability ✅（Review PASS，详见 `docs/refactor/PHASE8-REVIEW.md`；本地提交 `ede414b`）
 
 ## Current Work
 
@@ -157,7 +157,7 @@ Phase 8 — Consistency & Reliability（**T1–T8 全部完成**；**阶段六/�
       `lock:reservation:*` 均 0；`reservation.lua` 仍为 Phase 6 记录指纹；`pom.xml` 与 `application*.yaml` 未动
 - [x] **生产代码零改动**（返工阶段）：mtime 窗口（窗口内仅两个测试文件）+ 与返工前备份逐字节比对，两条独立证据
 
-### Phase 8（已完成）— 本地提交 `18fae51`「feat: add consistency reconciliation for reservation」
+### Phase 8（已完成）— 本地提交 `ede414b`「feat: add consistency reconciliation for reservation」
 
 设计已产出：`docs/refactor/PHASE8-DESIGN.md`（阶段一~四，**待用户批准后进入实现**）。
 
@@ -601,7 +601,7 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 
 ### Phase 8 阶段六/七 跨 Task Review（PASS）— 详见 `docs/refactor/PHASE8-REVIEW.md`
 
-  - **范围**：不采信 Codex 自述，由我直读 T1–T8 全部交付代码 + 实跑复核，产出独立 Review 文档（295 行）
+  - **范围**：不采信 Codex 自述，由我直读 T1–T8 全部交付代码 + 实跑复核，产出独立 Review 文档（307 行）
   - **变更面（相对 T8 结束时）恰好 2 个生产文件**，均为下述 F-A 修复：
     `service/impl/ReservationDlqServiceImpl`（`queryPage` 排序）、
     `service/impl/ReservationRequestServiceImpl`（`listStale` 排序）。
