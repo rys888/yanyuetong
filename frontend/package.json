@@ -1,0 +1,26 @@
+{
+  "name": "yanyuetong-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check:request": "node scripts/verify-request-layer.mjs"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "2.3.2",
+    "axios": "1.20.0",
+    "dayjs": "1.11.23",
+    "element-plus": "2.14.7",
+    "json-bigint": "1.0.0",
+    "pinia": "3.0.4",
+    "vue": "3.5.43",
+    "vue-router": "4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.9",
+    "vite": "8.3.3"
+  }
+}

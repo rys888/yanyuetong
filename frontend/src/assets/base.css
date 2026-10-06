@@ -1,0 +1,28 @@
+:root {
+  font-family: var(--el-font-family);
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color-page);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--el-bg-color-page);
+}
+
+button,
+input {
+  font: inherit;
+}
