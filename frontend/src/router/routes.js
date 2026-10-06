@@ -47,6 +47,18 @@ export const routes = [
         component: () => import('../views/equipment/EquipmentDetailView.vue'),
         meta: { title: '设备详情' },
       },
+      {
+        path: 'batches',
+        name: 'batch-list',
+        component: () => import('../views/batch/BatchListView.vue'),
+        meta: { title: '预约批次', menu: { title: '预约批次', icon: 'Calendar', order: 4 } },
+      },
+      {
+        path: 'batches/:id',
+        name: 'batch-detail',
+        component: () => import('../views/batch/BatchDetailView.vue'),
+        meta: { title: '批次详情' },
+      },
     ],
   },
   {

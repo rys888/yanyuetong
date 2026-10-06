@@ -768,6 +768,108 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 
 ---
 
+### F4 验收实测记录（2026-10-06，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain -uall -- frontend` 恰好 **9 项 = 4 新增 + 5 修改**，与任务包白名单逐条吻合（改：`package.json`、`router/routes.js`、`utils/query.js`、`views/equipment/EquipmentDetailView.vue`、`views/home/HomeView.vue`；增：`api/reservationBatch.js`、`views/batch/BatchListView.vue`、`views/batch/BatchDetailView.vue`、`scripts/verify-batch.mjs`）。
+
+**后端零接触**：`git status --porcelain -- src pom.xml README.md` **为空**。该命令在**写本记录之前**跑的，故现已必然非空的是 `docs/frontend/FRONTEND-DESIGN.md` 本身——**那是本次记录的写入，不是 Codex 的改动**（复跑时请把 `docs/` 排除在上述命令外，或对照本行说明）。`package-lock.json`、`vite.config.js` 未动；`package.json` 只多一行 `check:batch`，`dependencies`/`devDependencies` 逐字节未变。
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `node scripts/verify-batch.mjs`（带真机 token + C 组 fixture） | **22 PASS / 0 FAIL / 0 SKIP** | A 组 13（静态接线文本）+ B 组 6（真机契约）+ **C 组 3（已发布批次形状）不再是 SKIP** |
+| **浏览器仪器 1**（无 fixture，47 条断言） | **47 PASS / 0 FAIL** | 覆盖菜单/空态/状态白名单/URL 同步/越界页/business 通道/非数字 id 等 |
+| **浏览器仪器 2**（fixture，32 条断言） | **32 PASS / 0 FAIL** | 覆盖验收③的按钮可用性与列表/详情字段形状 |
+| `npm run check:browse`（F3） | **37 PASS / 0 FAIL** | F3 未回归 |
+| `npm run check:request`（F1，带 token） | **26 PASS / 0 FAIL** | F1 未回归 |
+| `npm run build` | **exit 0**，266 ms | 仅既存的大 chunk 体积警告 |
+| 控制台噪音扫描（仪器走遍全部路径） | **非 favicon 噪音 0 条**；favicon 既存噪音本轮回 **0 条** | 仪器对二者**分别计数、不静默丢弃**（见下缺陷①）；favicon 那条 F0 起既有，非 F4 引入 |
+
+**§10 判据 ①–⑤ 的落点**：
+
+| 判据 | 落点与实测证据 |
+|---|---|
+| ① 无数据时空态 | 仪器 1 组 2（2a–2e）：显示「暂无可预约的批次」+ 说明文案，零表格行；带筛选无结果时改显「没有符合条件的批次」+「重置筛选」（组 4） |
+| ② 管理端发布后学生端可见 | fixture 走**真实链路**造批次（`sendCode` → Redis 取码 → LAB_ADMIN 登录 → `createBatch` → `publish`），直连后端核对 `bookingState` 为 `OPEN`（id 11003）/`NOT_STARTED`（id 11004）；仪器 2 组 18（18a–18i）核对列表行与列形状，组 19（19a–19h）核对详情字段 |
+| ③ 按钮可用性由 `bookingState` 驱动 | 仪器 2 组 11/12：OPEN 态按钮 `disabled=false`、点击出 `ElMessage.info('提交预约功能将在后续版本开放')`；NOT_STARTED 态 `disabled=true` + 「当前不可预约：未开始预约」。另有 verify-batch A 组两条**静态锁**：`submit availability comes only from BookingState actions`、`never recomputes bookingState with the client clock` |
+| ④ `/reservation-batch/999999` | 仪器 1 组 7：实测 **200 + `{"success":false,"errorMsg":"预约批次不存在"}`** → `kind='business'`，页面显示该文案且**未被误判成「加载失败」** |
+| ⑤ 不发送 `status=DRAFT/CANCELLED` | 仪器 1 组 3 在**请求层**断言：这三个值全程零请求。实现是 `utils/query.js:66` 的白名单 `BATCH_PUBLIC_STATUSES.includes(status) ? status : undefined`（`BATCH_PUBLIC_STATUSES = ['PUBLISHED','CLOSED']`，`query.js:49`），即**非法值根本不发**，而非"发了让后端拒" |
+
+**为什么 `status` 白名单是硬需求而非优化**：实测 `DRAFT`/`CANCELLED` → **400 + Result 体 `批次状态不合法`**；`BOGUS` → 400 但走 Spring ErrorAttributes 体（`message` 为空）→ 落到 `clientError` 通道。变体 V1 把白名单摘掉后，6 条状态断言与**控制台噪音断言同时变红**——即真的发出了 400 请求。同理 `isNumericId` 前置过滤也是硬需求：`/reservation-batch/abc` 实测 **HTTP 500**（后端不做类型校验），变体 V2 摘掉后 8a/8b/8c 与噪音断言一起变红。`/reservation-batch/{id}` 需要登录态，无 `authorization` 头时是 **401 空体**。
+
+#### 两支浏览器仪器，以及它们**互斥的数据前提**
+
+F4 的浏览器层判据被拆成两支仪器，原因是**判据 21 的前后半天然要求相反的数据前提**：前半（`total>0` 时越界页自愈）必须有已发布批次，后半（`total=0` 时**不**自愈、保持 `current=99`）必须没有。
+
+| | 仪器 1 | 仪器 2 |
+|---|---|---|
+| 前提 | 库中**无**已发布批次 | 库中**有**已发布批次（fixture） |
+| 覆盖 21 | **后半**（组 6：6a–6d，含「total=0 时未自愈改写 URL」） | **前半**（21a–21c，实测 `?current=99` 被改写为 `?current=1` 且渲染出 2 行） |
+| 设备 12 内嵌区块 | 9b：显示「该设备暂无预约批次」 | S1：**不再**显示该文案；S2：内嵌表含批次行 |
+| 断言数 | 47 | 32 |
+
+9b 与 S1 是同一件事的正反两面，**正好互补**——这本身就是两条断言都真实有效的旁证。代价是**复跑有顺序要求**：必须先让库回到「无已发布批次」跑仪器 1，再造 fixture 跑仪器 2。这一条已实测踩到：fixture 在位时仪器 1 报 **37 PASS / 10 FAIL**，10 条红色**全部**是空态相关断言（2a–2c、3e、4c/4d/4f、6b/6c、9b），**没有一条指向产品缺陷**。
+
+**fixture 的造与清都走真实 API，不做库内直改**：造 = `sendCode` → Redis 取码 → LAB_ADMIN 登录 → `createBatch` → `publish`；清 = `POST /reservation-batch/{id}/cancel`（`ReservationBatchServiceImpl.java:176`，允许 `DRAFT`/`PUBLISHED` → `CANCELLED`，带 `assertEquipmentManageable` 所有权校验，并连带清掉 Redis 的 quota/users key）。
+
+#### 证伪实验（15 个变体，复原后 6 个文件 `shasum -a 256 -c` 全 OK）
+
+**仪器 1（无 fixture）——9 个变体，各自单独跑**：
+
+| 变体 | 改坏什么 | 实测变红 | 结论 |
+|---|---|---|---|
+| V1 | 摘掉 `status` 白名单 | 3a/3a-2/3b/3b-2/3c/3c-2 **+ 噪音断言** | 有判别力（证明白名单是唯一拦住 400 的东西，且噪音断言承重） |
+| V2 | 摘掉 `isNumericId` 前置 | 8a/8b/8c + 噪音 | 有判别力（后端真的吐了 500） |
+| V3 | 空态忽略 `activeFilter` | 3e/4c | 有判别力 |
+| V4 | 内嵌请求不带 `equipmentId` | 9c | 有判别力 |
+| V5 | 把 `business` 判成 `error` | 7b | 有判别力 |
+| V6 | 菜单 `order` 4→2 | 1b | 有判别力 |
+| V7 | 空态标题恒为「没有符合条件的批次」 | 2a/2d/4f/6c | 有判别力 |
+| V8 | 空态标题恒为「加载失败：测试」 | 2a/2e/3a-2/3b-2/3c-2/3e/4c/4f/6c | 有判别力 |
+| V9 | 设备内嵌空态文案改成「批次加载失败：测试」 | 9b/9f | 有判别力 |
+
+**仪器 2（fixture）——6 个变体**：
+
+| 变体 | 改坏什么 | 实测变红 | 结论 |
+|---|---|---|---|
+| V10 | `:disabled="!canSubmit"` → `"false"` | 12b | 有判别力 |
+| V11 | `:disabled="!canSubmit"` → `"true"` | 11b/11c/11d/11e | 有判别力 |
+| V12 | 提示语 → `void 0` | **只有 11d** | 有判别力 |
+| V13 | `handleSubmit` 里加一行 `fetch POST /reservation` | **11e + 噪音断言** | 有判别力（越界发的 POST 真的在控制台炸出错） |
+| V14 | 列表时间原样渲染 `{{ row.startTime }}` | 18g/18h | 有判别力 |
+| V15 | 停掉越界页自愈 | 21a **+ 21b/21c** | 有判别力（21b/21c 是真实后果：页面真停在空页 `current=99`） |
+
+#### 仪器与装置自身的缺陷（9 条，与 F2/F3 那几条同族）
+
+1. **仪器 1 favicon 误报**：唯一噪音是隐式 `/favicon.ico` 404（F0 起既有：`index.html` 无 `<link rel="icon">`、无 `public/` 目录，不在 F4 改动集内）。处置**不是静默丢弃**，而是显式分类计数并把 favicon 单列。
+2. **仪器 1 断言标签歧义**：`3${bad[0].toLowerCase()}` 让 `DRAFT` 与 `PUBLISHED` 都成了 `3d`。改为索引式 `3${'abc'[i]}`。
+3. **仪器 2 四条纯否定式断言是空转的**（18h/19b/19g/11c）：在**完全坏掉的空页**上照样全绿。全部补上正向前置条件后才成立。**否定式断言必须与正向前提合取**——这是本轮最有普适价值的一条。
+4. **仪器 2 在按钮不存在时直接 `.click()`** → `TypeError` 崩溃，**后续 12/21/S 组与 Summary 全部丢失**。加 `if (btnA === false)` 守卫。仪器不能在退化状态下崩——崩了会连带丢掉还没跑的证据。
+5. **仪器 2 断言写错实验室名**：18f 期望「材料科学实验中心」，而设备 12 实际属于**实验室 4 = 计算与样品制备中心**。运行前核对种子数据时抓到。
+6. **复苏器的单行协议被多行替换串破坏**：`IFS=$'\t' read -r file old new expect` 只吃一行，而 V12/V13 的替换串含换行，于是实际施加的是「删掉 `function handleSubmit() {` 这一行」。**症状是「期望变红」字段为空 + 两个变体跑出一模一样的 17 FAIL**。处置：只写单行替换串，并加 `expect` 空值守卫——为空即拒绝施加。**一个坏掉的变体跑出 17 个 FAIL，看起来比 1 个 FAIL 更有说服力**，这正是它危险的地方。
+7. **fixture 脚本的 CJK 吞并 `$VAR`**：`$TOKEN_FILE（`、`$id（`、`$eq，` 里全角标点被 bash 吞进变量名 → `unbound variable`。全部改用 `${VAR}`，并用 `grep -oP '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]+'` 自检（注意 `grep` 按行报，**一行里藏多个匹配会被漏掉**，须用 `-oP` 枚举）。
+8. **fixture 脚本第 ⑥ 步漏带 `authorization` 头** → 401 空体 → `json.JSONDecodeError` 崩。补头并容忍非 JSON 响应。
+9. **残留 DRAFT 批次挡住发布**：上一次崩溃在 `say` 之前就已执行了 `curl` POST，留下 DRAFT 11000 占着设备 12，导致发布 11001 报「同一设备的使用时段不能重叠」。机理是同一条 `validatePublishInvariants`（`ReservationBatchServiceImpl.java:280`）里的重叠校验（`:307`–`:314`）**只排除 `CANCELLED`**（`:309` 的 `.ne(…, CANCELLED)`），`DRAFT`/`PUBLISHED`/`CLOSED` **全都会参与**，所以草稿批次同样会挡住同一设备的发布。清掉 DRAFT 后才发布成功。**教训：脚本崩在中途会留下半成品状态，而报错信息指向的方向（时段冲突）完全不是真因。**（此条我在记录初稿里曾写成"重叠检查没有状态过滤"，核对源码后订正为"只排除 CANCELLED"——**结论对、机理错**也是要改的，否则下一个人会照错的机理去推理。）
+
+#### Review 发现的问题
+
+1. **`views/batch/BatchDetailView.vue:3` 是一处死三元**：
+   ```html
+   <PageHeader :title="batch?.equipmentName ? `预约批次详情` : '预约批次详情'">
+   ```
+   两个分支**逐字相同**，条件无意义。**源头是我任务包里的文字**——我写了「标题在有设备名时显示…」，Codex 照字面把两个分支都填成了同一个字面量。属可读性缺陷、无功能影响（两分支同值），**待 Codex 额度恢复后返工**。这条也记入台账：任务包里描述性的措辞会被逐字实现成代码，写约束时应直接给断言式的目标（"标题恒为 X"），不要给条件式叙述。
+2. 三条 `check:session` 的需登录码检查仍未跑（属 F2 范畴，非 F4 判据）。
+
+**F4 未新增 `FRONTEND_BACKEND_GAP`**：本轮实测未发现需要后端配合的新缺口。既有的 D-13/G-F3-1（`/laboratory/list` 被 `DEFAULT_PAGE_SIZE=5` 钳死，实验室超过 5 个时筛选下拉会**静默少列**）在 F4 期间复查仍是**潜伏**状态——种子只有 4 个实验室，一页装得下，未触发。
+
+#### 迄今仍未覆盖
+
+- **死三元那条不在任何自动判据内**：仪器不检查"标题是否有意义"，它只检查页面是否渲染正确。修掉它会改 `BatchDetailView.vue`，**修完必须复跑仪器 2**（32 条）。
+- **「简洁/现代/高校科研感/克制」的观感判断只能由人眼确认**，不在任何自动判据内（同 F3）。
+- **fixture 依赖的四组判据（11/12/18/19/21前半）只有在库中有已发布批次时才能跑**，空库上它们会正确地变红。这不是缺陷，但复跑有顺序要求（见上）。
+- **D-13 仍潜伏**（4 个实验室，未触发 5 条上限）。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**

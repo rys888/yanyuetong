@@ -4,6 +4,7 @@
     <p class="phase-note">
       <RouterLink to="/laboratories">浏览实验室</RouterLink>
       <RouterLink to="/equipment">浏览设备</RouterLink>
+      <RouterLink to="/batches">预约批次</RouterLink>
     </p>
 
     <dl class="identity-list">
