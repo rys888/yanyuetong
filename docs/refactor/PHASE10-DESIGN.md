@@ -39,7 +39,7 @@
 - **S3 数据库**：`db/hmdp.sql` 精简为仅存表的基线；新增幂等 DROP 脚本（用户执行）；Phase 2 种子 INSERT 幂等化。
 - **S4 凭据**：清工作区 3 处明文；历史登记为已知边界（用户裁决，不改写）。
 - **S5 P1 修复**：F4（删实验室不查依赖）、F3（`admin_user_id` 外泄）、F-C（`listStale` 饥饿）、P2-25（全局兜底 HTTP 状态）。
-- **S6 P2 修复（"合理范围内"）**：#22 发布失败文案分层次、#17 缓存测试判据自证、#26 分页用例夹具加固。
+- **S6 P2 修复（"合理范围内"）**：#22 发布失败文案分层次、#17 缓存测试判据自证、#26 分页用例夹具加固（**后经 T5 实测证伪，未改动**）。
 - **S7 文档**：4 份根目录文档归位、README 从零撰写、`MIGRATION_STATUS.md` 收口为 PROJECT COMPLETE。
 - **S8 最终验收**：见阶段三 §3.13 的验收清单（含判别力实验与残留检查）。
 
@@ -207,7 +207,7 @@
 | 14 | 设备缓存删除失败无补偿（P2-18） | P8-DESIGN:591 | 同上 |
 | 15 | F-C `listStale` 饥饿 | P8-REVIEW:179 / P9-DESIGN:45 | §3.9 **修** |
 | 16 | P2-25 全局兜底无 HTTP 状态 | P6-REVIEW:316 | §3.8 **修** |
-| 17 | P2-26 分页用例隐含"夹具在第 1 页" | P6-REVIEW:317 | §3.10 加固 |
+| 17 | P2-26 分页用例隐含"夹具在第 1 页" | P6-REVIEW:317 | §3.10 **前提证伪，不改**（T5 实测：该用例本就确定） |
 | 18 | P2-9 `EquipmentMapper.xml` 前导通配符无法走索引 | MS #11 | §3.12 登记 |
 | 19 | P2-12 Phase 2 种子 INSERT 不幂等 | MS #12 | §3.4 修 |
 | 20 | P2-13 `tb_user.password` 从未使用 / 管理员无密码 | MS #13 | §3.2 删 DTO 字段 + README 说明 |
@@ -217,7 +217,7 @@
 | 24 | P2-21 F4 `DELETE /laboratory/{id}` 不查依赖 → 孤儿批次 | MS #21 | §3.6 **修** |
 | 25 | P2-22 发布失败两分支复用同一句报错 | MS #22 | §3.11 修 |
 | 26 | P2-24 并发用例判别力概率性（3/18） | MS #24 | §3.12 登记 |
-| 27 | P2-27 夹具手机号碰撞概率 ~1e-5 | MS #27 | §3.10 加固（**修法与机制均已订正，见 §3.10**） |
+| 27 | P2-27 夹具手机号碰撞概率 ~1e-5 | MS #27 | §3.10 **机制证伪，T5 撤销不改**（见 §3.10「订正四」；原「修法订正」保留留痕） |
 | 28 | P2-28 中断测试留夹具残留，收尾须查 DB | MS #28 | §3.13 验收清单 |
 | 29 | `tb_` 前缀是否去除 | P2-DESIGN:170 | §3.12 **保留** |
 
@@ -382,18 +382,39 @@ LIMIT #{limit}
 |---|---|
 | `RedissonTest`、`HmDianPingApplicationTests` | 删（无断言） |
 | #22 P2-17：`EquipmentCacheTest` 靠语句 id 匹配 MyBatis 语句 | **无需改动——判据自证已经存在**。T2 的判别力实验实测：把 `:235` 的语句 id 改回 `com.hmdp.mapper.EquipmentMapper.selectById` 后，`shouldUseCacheAfterFirstDatabaseQueryAndCacheMissingEquipment:146` 立刻变红（`expected: <1> but was: <0>`）。该断言（`:146/:150/:154` 对 `equipmentSelectCounter.getCount()` 的断言）**本身就是**"拦截器实际命中次数 > 0"的判据自证：id 一失配计数恒为 0，测试就不可能还绿。故初稿列为待办是**误判**，已撤销 |
-| #17 P2-26：`ReservationBatchLifecycleTest` 的公开分页用例依赖"夹具落在第 1 页" | 加固：像 Phase 6 的分页用例那样用 `equipmentId` 收窄查询，消除对库中累积数据的依赖。**方法名订正（实测）**：本文档此前写作 `shouldIncludePublishedAndClosedBatchesOnPublicPage`，该名字在文件中**不存在**；真实方法名是 `shouldOnlyReturnPublishedAndClosedBatchesOnPublicPage`（`ReservationBatchLifecycleTest:416`）。派发 T5 时必须用订正后的名字 |
-| #27 P2-27：夹具手机号碰撞概率 | 加固。**本文档此前给的修法（"提到 `% 100_000_000L`"）落不了地，必须订正**——见下方两条实测 |
+| #17 P2-26：`ReservationBatchLifecycleTest` 的公开分页用例依赖"夹具落在第 1 页" | **前提被实测证伪：该用例本来就是确定的，T5 不改**（见下方「#26 订正」）。原拟的 `equipmentId` 收窄属可选加固，不是缺陷修复。**方法名订正（实测）**：本文档此前写作 `shouldIncludePublishedAndClosedBatchesOnPublicPage`，该名字在文件中**不存在**；真实方法名是 `shouldOnlyReturnPublishedAndClosedBatchesOnPublicPage`（`ReservationBatchLifecycleTest:416`）。派发 T5 时必须用订正后的名字 |
+| #27 P2-27：夹具手机号碰撞概率 | **修法落不了地、机制也被实测证伪，T5 撤销不改**——见下方「订正一 / 订正二 / 订正四」 |
+| #12 P2-12：`CacheClientMutexTest` T1 夹具复杂度 | **保留**。它 50 线程确定性构造了"并发未命中只回源一次"，是 Phase 4 P1-8 修复的**判别力证据本身**；简化会削弱证据强度。登记理由 |
+| #26 P2-24：并发用例判别力 3/18 概率性 | 保留并登记（正确实现下恒绿，判别力是概率性的固有局限） |
 
 **#27 订正一：文档原修法会直接把测试改崩（实测）。** 三处 `%07d` 夹具的手机号拼法是 `String.format("17%s%02d", phoneSuffix, sequence)`（`ReservationPublishFailureTest:334`、`ReservationMqTest:800`、`ReservationSubmitTest:523`），即 **2 + 7 + 2 = 11 位**；而 `tb_user.phone` 是 `varchar(11) NOT NULL`，本机 `sql_mode` 含 `STRICT_TRANS_TABLES`。实测（临时库 `hmdp_p10_len`，建 `varchar(11)` 表后写入，用完即 DROP，已核对 `SCHEMATA` 无残留）：11 字符写入成功；**12 字符报 `ERROR 1406 (22001) Data too long for column 'phone'`**。所以保留 `"17"` 前缀、只把 `%07d` 加宽到 `%08d`，会让这三个类的 `@BeforeEach` 每次直接抛错——**不是加固，是把测试全部改红**。任何修法都必须守住 **11 位**这个不变量。
 
-**#27 订正二：真正的问题不是"碰撞空间"而是"取模周期"（机制分析）。** `System.nanoTime()` 的纳秒值**低位在跑**，`% 10_000_000L` 取的是低 7 位十进制数，等价于一个**周期仅 10 ms** 的计数器——两个测试类的 `@BeforeEach` 只要相隔约 10 ms 的整数倍，手机号后缀就完全相同。这不是生日悖论式的"10^7 里抽两个"（那个概率确实约 1e-5，即 §2.5 台账里的原始估计），而是**周期性复现**。照此，`% 100_000_000L` 只是把周期从 10 ms 挪到 100 ms，属于缓解而非修复，且如上一条所述还落不了地。**正确修法**：保持 `%07d` 宽度与 `"17"` 前缀不变（守住 11 位），把时间源换成取模周期长于任何一次测试运行的形式，例如 `System.currentTimeMillis() % 10_000_000L`（周期 10^7 ms ≈ 2.78 小时）。
+**#27 订正二：真正的问题不是"碰撞空间"而是"取模周期"（机制分析）。⚠️ 本条推断已被实测证伪——见下方「订正四」。原文保留以留痕，其中"周期 = 10 ms"这个数字本身经实测确认正确（旧表达式首个重复点 = `10_000_000 ns`；毫秒版 = `10_000_000 ms` ≈ 2.78 小时），被证伪的是"该周期可达失败路径"这一步。** `System.nanoTime()` 的纳秒值**低位在跑**，`% 10_000_000L` 取的是低 7 位十进制数，等价于一个**周期仅 10 ms** 的计数器——两个测试类的 `@BeforeEach` 只要相隔约 10 ms 的整数倍，手机号后缀就完全相同。这不是生日悖论式的"10^7 里抽两个"（那个概率确实约 1e-5，即 §2.5 台账里的原始估计），而是**周期性复现**。照此，`% 100_000_000L` 只是把周期从 10 ms 挪到 100 ms，属于缓解而非修复，且如上一条所述还落不了地。**正确修法**：保持 `%07d` 宽度与 `"17"` 前缀不变（守住 11 位），把时间源换成取模周期长于任何一次测试运行的形式，例如 `System.currentTimeMillis() % 10_000_000L`（周期 10^7 ms ≈ 2.78 小时）。
 
-**#27 的严重性定性（必须如实写入，不夸大）**：`tb_user.phone` 上有唯一索引 `uniqe_key_phone`（实测 `information_schema.STATISTICS`，`NON_UNIQUE=0`），所以碰撞的后果是**插入报错、用例变红**（响亮失败），**不是**数据串扰式的静默错误。`tb_laboratory.name` 虽无唯一索引，但实验室名重复不影响用例（测试都按 id 取实体）。因此本项是**偶发 flaky 源**，不是静默正确性缺陷。
+**#27 的严重性定性（必须如实写入，不夸大）**：`tb_user.phone` 上有唯一索引 `uniqe_key_phone`（实测 `information_schema.STATISTICS`，`NON_UNIQUE=0`），所以碰撞的后果是**插入报错、用例变红**（响亮失败），**不是**数据串扰式的静默错误。`tb_laboratory.name` 虽无唯一索引，但实验室名重复不影响用例（测试都按 id 取实体）。**订正（见「订正四」）**：本项在单 fork 顺序执行下**不可达**，所以连"偶发 flaky 源"这个定性也偏重了——准确的定性是"**潜在地雷**：一旦引入并行执行或并发跑测就会变成响亮失败，不是静默正确性缺陷"。不得据此说它现在正在造成 flaky（无实测证据支持）。
 
-**#27 的边界（有意不扩大范围）**：另有一批夹具用 `System.nanoTime() % 100_000_000L`（周期 100 ms），是同一缺陷的较弱形式，分布在 10 个测试类中。T5 **不动它们**——理由是范围纪律，以及其中 `ReservationFulfillmentReconcileTest` / `ReservationReconcileTest` 刚被 T4 改过、再动会与 T4 的提交边界纠缠。这是**有意的取舍**，不得记成"已修好"。
-| #12 P2-12：`CacheClientMutexTest` T1 夹具复杂度 | **保留**。它 50 线程确定性构造了"并发未命中只回源一次"，是 Phase 4 P1-8 修复的**判别力证据本身**；简化会削弱证据强度。登记理由 |
-| #26 P2-24：并发用例判别力 3/18 概率性 | 保留并登记（正确实现下恒绿，判别力是概率性的固有局限） |
+**#26 订正：该分页用例本来就是确定的，不需要收窄（实测证伪）。** 我原先的理由是"库里 id 更大的 PUBLISHED/CLOSED 批次可能把被断言的两行挤出第一页"。实测证伪，四条：
+
+1. 排序是 `ORDER BY b.id DESC`，且是 `selectReservationBatchPage` 的**唯一**排序子句（`src/main/resources/mapper/ReservationBatchMapper.xml` 已读全文）。
+2. 两条 `assertTrue` 断言的对象是 `publishedId`（第 3 个创建，id = N+2）与 `closedId`（第 4 个创建，id = N+3）——**本用例最后创建的两行**，id 全局最大，因此必然占据第一页前两位（页大小 ≥ 2 即可）。库里有多少更早的公开批次**都不影响**：更早意味着 id 更小，按降序排在后面。
+3. 两条 `assertFalse` 由 WHERE 子句 `AND b.status IN ('PUBLISHED','CLOSED')` 保证，与分页窗口完全无关。
+4. **阴性对照实测**：把 `setEquipmentId` 过滤去掉、恢复成 `queryBatchPage(new ReservationBatchQueryDTO())` 后重跑，`ReservationBatchLifecycleTest` 仍 **21/21 全绿**，零判别力。
+
+结论：该用例在"单 fork 顺序执行 + 夹具行 id 最大"两个条件下**已经是确定的**。收窄查询只是"只断言自己创建的夹具"这一加固，**不是**缺陷修复。本项从"待修缺陷"降级为**可选加固**，T5 不执行。
+
+**#27 订正四：机制假设被实测证伪，本项撤销、不改代码。** 「订正二」推断"两个类的 `@BeforeEach` 相隔约 10 ms 整数倍就撞出同一手机号"。实测不成立，三条：
+
+1. **三个类都在 `@AfterEach` 删掉自己创建的用户行**：`ReservationMqTest:196`、`ReservationSubmitTest:156`、`ReservationPublishFailureTest:21` 均为 `userService.removeById(...)`，且三处 `createUser` 每次都 `users.add(user)`。类与类之间不存在共存的行，"两个类撞号"缺少前提。
+2. **类是单 fork 顺序执行的**：实测一次四类运行总耗时 **57.118 s**，而四类各自耗时之和约 **55.6 s**（3.4 + 45.5 + 0.6 + 6.1）。若为并行 fork，总时间应≈最长的 45.5 s。仓库内也无任何 JUnit 并行配置（`src/test/resources` 下只有 `application.properties`，无 `junit-platform.properties`；全仓库检索 `parallel` 无命中）。类内用户的 `sequence` 互不相同（`ReservationSubmitTest` 为 98/1/2 与 10..29），故类内也不可能撞号。
+3. **决定性反证 W1**：把 `ReservationMqTest` 与 `ReservationPublishFailureTest` 的 `phoneSuffix` **都钉成同一常数 `1234567`**（两者都有 `createUser(1, ...)`，若跨类共存则必然撞号），结果两个类 **全绿**。直接证明跨类共存不成立。
+
+补充：即便考虑"被中断的运行留下的残留行"，其碰撞概率为 10^-7 且**与取模周期无关**（残留值是固定的），所以"换时间源"并不能改善这条路径。
+
+**阴性对照 W2**：把三处改回旧的纳秒表达式后，四个类 **67 例仍全绿**——没有任何用例能判别这个改动。既然本套件的执行模型下 10 ms 周期够不着任何失败路径，保留该改动就等于留一个"修不了东西、又没有测试"的 diff。**故 T5 撤销 #27，三个测试文件恢复原样**（已核对与 HEAD 逐字节一致：`git diff --stat` 空输出）。
+
+**何时它会重新变成真隐患**：若将来引入 JUnit 并行执行（`junit.jupiter.execution.parallel.enabled=true`），或出现多进程/多 CI 作业并发对同一个库跑测试，两个类就会真正共存，届时按「订正二」的形式改时间源（保持 `%07d` 与 `"17"` 前缀、守住 11 位）。
+
+**关于 `% 100_000_000L`（周期 100 ms）那一批**：原「有意不扩大范围」的取舍理由（范围纪律、避免与 T4 提交边界纠缠）随之作废；真实理由是它们按上述同一结论**同样够不着**，故一并**不改**。
 
 ### 3.11 [决策] 文档归置、README、MIGRATION_STATUS 收口
 
@@ -449,6 +470,18 @@ LIMIT #{limit}
    **待用户裁决的收口项**：DROP 执行完毕后，`phase10_drop_legacy_tables.sql` 是否从仓库删除。保留的理由是它是迁移链的一环（新装库不需要、旧库需要）；删除的理由是它是全仓最集中的一份黑马域名清单。**默认保留**，在 README 已知边界里说明它的用途与一次性性质。
 4. **禁改清单**：`reservation.lua`、`reservationRollback.lua`、`unlock.lua`、`ReservationLifecycleServiceImpl`、`ReservationPersistenceServiceImpl`、`ReservationQuotaRollbackExecutor`、`ReservationQuotaExecutor`、`ReservationRequestStatus`、`ReservationStatus`、`active_flag` DDL —— 用 `git status --porcelain -- <真实路径>` 核验（路径必须先 `find` 定位，不得凭记忆拼）。
 5. **凭据**：全仓库正则扫描（白名单 `change_me` / `your_password_here` / `${...}` / 占位符），命中数 = 0。**扫描必须先自证**（在已知存在的串上命中，如 `package com.yanyuetong` / `spring:`），**文件清单必须用 `find` 或 `git -c core.quotepath=false ls-files`**——默认 `git ls-files` 会把 3 个中文文件名转义成八进制，导致含真口令的那份报告被静默跳过、给出假通过的 0（见 §2.2 实测）。
+
+   **基线实测（2026-10-06，扫描器已跑通并三项目证）**：`/tmp/p10-cred-scan.sh`，候选文件 159 个（`find` 生成清单、NUL 分隔），自证 A = 清单含 3 个非 ASCII 路径（正是 `git ls-files` 会漏掉的那批：`./实验资源预约平台-分阶段重构Phase计划.md`、`./秒杀消息队列迁移RabbitMQ-交付报告.md`、`./黑马点评 → 实验资源预约平台重构.md`）；自证 B = 含 `com.yanyuetong` 的文件 **121** 个（>100，扫描器确实在工作）；自证 C = 用不存在串扫描命中 **0**。
+   **`123456|123321` 命中 9 行 / 4 个文件**。但正则扫描**不完整**，必须补一条"认结构不认值"的探测（`(pass(word|wd)?|pwd)["']?[:=]` 后接非占位值），否则漏掉 `password: 123` 这类值——**实测该探测抓到了正则漏掉的 `PHASE2-DESIGN.md:400`**。
+   **待清项（4 个已入库文件，共 7 处 + 1 类弱项）**：
+   | 文件 | 位置 | 性质 |
+   |---|---|---|
+   | `秒杀消息队列迁移RabbitMQ-交付报告.md` | `:12`（本机**当前** MySQL/Redis 口令）、`:78` 与 `:443`（`guest/guest`，RabbitMQ 出厂默认） | 真凭据 + 弱默认值 |
+   | `docs/refactor/PHASE0-BASELINE.md` | `:63`、`:226`、`:250` | 课程时代旧值 `123321` |
+   | `docs/refactor/PHASE2-DESIGN.md` | `:400` | 课程时代旧值 `password: 123`（**仅结构探测可捕获**） |
+   | `docs/refactor/PHASE10-DESIGN.md` | `:121`、`:122`、`:126` | **我自己的审计注记逐字引用了上述值**——自我引入的残留，T6 必须一并消除（改为只留行号、不复述值） |
+   **白名单（不在待清项内）**：`src/main/resources/application-local.yaml:3/5/8`——已由 `.gitignore:37` 忽略且 `git ls-files` 确认未跟踪；`application.yaml` 三处已是 `change_me` 占位。**订正**：本文档此前记"3 个文件 4 处"，实测为 **4 个已入库文件**（多出 `PHASE2-DESIGN.md:400`）外加 `PHASE10-DESIGN.md` 自身的引用。
+   **扫描器自身踩过的两个坑（写下来，避免 T6 重犯）**：① 清单用换行分隔却传给 `xargs -0`，整个文件被当成**一个**超长文件名，`grep` 把 `File name too long` 写到 stderr 而 stdout 为空 ⇒ **看起来像"命中 0"的假通过**；两端分隔符必须统一为 NUL，且**绝不 `2>/dev/null`**。② macOS/BSD `xargs` 没有 `-a` 参数；macOS bash 3.2 没有 `mapfile`。
 6. **README 章节**：15 节逐节核对存在且非空。
 7. **数据库**：死表已 DROP（`information_schema` 复核）；在用 4 表 + 种子数据（`tb_equipment` 12 / `tb_laboratory` 4）未损；`tb_user` 行数未变。
 8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 残留键 = 0；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
@@ -487,6 +520,26 @@ LIMIT #{limit}
    | V8 | `LOGIN_USER_TTL` → `36000L` | 17 例全绿（阴性对照，常量无语义可测） | 按本质登记 |
 
    **V4 / V5 是阴性对照**：故意破坏修复而测试仍全绿，即覆盖缺口的**实证**而非推断。二者已列为返工 R1 / R2（§3.8、§3.9）。
+
+   **返工后的复验（V10–V12，T4 最终状态上执行）**：
+
+   | 变体 | 改坏什么 | 实测结果 | 结论 |
+   |---|---|---|---|
+   | V10 | `recordFailReason` 去掉显式 `.set(getUpdateTime, now())` | **恰好 1 例红**：`shouldAdvanceUpdateTimeWhenSameReconcileFailureRepeats` | ✅ R2 关闭了 V5 的缺口 |
+   | V11 | 移除 `handleRuntimeException` 的 500 注解 | **恰好 1 例红**：`shouldReturnInternalServerErrorForUnexpectedRuntimeException` | ✅ R1 关闭了 V4 的缺口 |
+   | V12 | 移除 `handleHttpMessageNotReadable` 的 400 注解 | **恰好 1 例红**：`shouldReturnBadRequestForUnreadableJsonBody` | ✅ 400 由结构级升为**行为级** |
+
+   三个变体均逐字节复原，7 文件合并 SHA-256 与改坏前完全一致。
+
+   **T5 的三项阴性对照（同一方法，目标为"证明两项误判"）**：
+
+   | 变体 | 改坏什么 | 实测结果 | 结论 |
+   |---|---|---|---|
+   | **W1** | 把 `ReservationMqTest` 与 `ReservationPublishFailureTest` 的 `phoneSuffix` **都钉成同一常数 `1234567`**（两者都有 `createUser(1,...)`） | **两类全绿** | ❌ 跨类共存不成立 → §3.10「订正四」 |
+   | **W2** | 三处 `phoneSuffix` 改回旧纳秒表达式 | **四类 67 例全绿** | ❌ #27 无判别力 → 撤销 |
+   | **W3** | `shouldOnlyReturnPublishedAndClosedBatchesOnPublicPage` 去掉 `equipmentId` 过滤 | **21 例全绿** | ❌ #26 无判别力 → 不改 |
+
+   另有一次**机制演示**（独立 JDK 8 程序，非测试）：旧表达式在 200 个"相差 10 ms 整数倍"的时刻 **200/200 撞号**，毫秒版 **0/200**；旧表达式首个重复点实测 `10_000_000 ns`（10 ms），毫秒版 `10_000_000 ms`（≈2.78 小时）；新旧各 200 万次采样中手机号长度恒为 11、无负号非数字。**即"周期是 10 ms"为真，但它在单 fork 顺序执行下不可达**——这正是 §3.10 订正四的核心。
 
    **诚实登记（无变体强度证据者，不得冒充已验证）**：`LOGIN_USER_TTL`（常量，V8 阴性对照证明无行为可测）；P2-22 分支二（CAS 拒绝，无可确定性构造的"读取后 UPDATE 前"注入点——由 Codex 明确登记，不伪造）；F4 的 `@Transactional`（无行为差异，见返工 R4）。
 10. **P0/P1/P2 审计表**：§10.7 三档逐条给结论与证据；P0 必须为零。
@@ -534,15 +587,19 @@ LIMIT #{limit}
 - **注意（写进任务包）**：若既有用例因 P2-25 状态码变更而变红，**先假定是既有断言写错了契约**（Phase 6 设计已更正为"应区分 400/500"），不要顺手把断言改成迁就实现；任何对**既有**测试的修改必须在汇报中单独列出并说明理由。
 - **执行结果（T4 实测）**：生产侧 7 项全部落地且经 Review 确认无误——`assertManageable` 顺序正确、注入的是 `EquipmentMapper`（无循环依赖）、两处 catch 内动作都被独立 try-catch 包住、`LOGIN_USER_TTL = 30L`、五处处理器齐备、P2-22 两句文案与 §3.11 钉的原文逐字一致、无混合行尾（`WebExceptionAdvice`/`RedisConstants` 仍为纯 CRLF）。**既有用例改写后旧名已不存在**：`shouldLeaveRequestNonTerminalWhenRollbackThrows` → `shouldBackOffFailedRequestAndRecoverAfterThreshold`，并新增 `shouldMoveFailedRequestOutOfStaleWindowSoLaterRequestCanProgress`。本地全量 4 类 **52 例 0 失败 0 错误**。
 - **返工（R1–R4，起因是 §3.13 第 9 条的 V4/V5 两项阴性对照）**：R1 用 standalone MockMvc 补 P2-25 的**行为级** 400/500 用例；R2 补 F-C 站点 1 的"同一失败原因第二次失败"用例；R3 补 F3 用例的"其余字段仍在"断言；R4 要求说明或收回 `deleteLaboratory` 上的 `@Transactional`（`SELECT COUNT(*)` 是一致性读，不关闭 check-then-act 的 TOCTOU 窗口，却暗示原子性）。
+- **返工执行结果（实测）**：R1 新增 `shouldReturnBadRequestForUnreadableJsonBody` / `shouldReturnInternalServerErrorForUnexpectedRuntimeException`（`MockMvcBuilders.standaloneSetup(new ExceptionProbeController()).setControllerAdvice(new WebExceptionAdvice())`），并**替换掉**原结构级反射用例 `shouldMapUnreadableRequestBodyToBadRequest`；R2 新增 `shouldAdvanceUpdateTimeWhenSameReconcileFailureRepeats`；R3 在 F3 用例内补 typed getter 断言；R4 去掉 `@Transactional` 及其 import，`assertManageable` 顺序与 F4 判据未受影响。四类 **18 / 10 / 5 / 21 = 54 例 0 失败 0 错误**（按 surefire XML 逐方法核对执行，非仅凭总数）。
+- **我自己在 R1 任务包里写错过一次（如实登记）**：我把断言字段写成 `code` / `msg`。Codex 据 `Result.java` 反驳，我回查确认它是**对的**——`Result` 的字段是 `success` / `errorMsg` / `data` / `total`。教训：派发任务包里的**字段名/方法名/常量必须现场 grep 源码得出**，不得凭记忆（同类错误在本 Phase 已出现三次：T5 #17 的假方法名、F4 列清单、`Result` 字段名）。
 
-### T5 — 测试卫生（**必须串行在 T4 之后**，理由见下）
+### T5 — 测试卫生（**结论：两项均为误判，不产生代码改动**）
 
-- **What**：§3.10 的 #17 P2-26（分页用例收窄）、#27 P2-27（手机号随机空间）。**#22 已撤销**（实测其判据自证已存在，见 §3.10 表内说明），本任务不再包含它。
-- **派发时必须用的订正事实（实测，勿沿用旧写法）**：① #17 的真实方法名是 `ReservationBatchLifecycleTest.shouldOnlyReturnPublishedAndClosedBatchesOnPublicPage`（文档旧写作 `shouldInclude...`，该名字不存在）；② #27 **不能**用"把 `%07d` 加宽到 `%08d`"来修——手机号是 `"17" + 7位 + 2位` = 11 位，而 `tb_user.phone` 是 `varchar(11)` 且 `sql_mode` 含 `STRICT_TRANS_TABLES`，12 位会报 `ERROR 1406 Data too long`（临时库实测）把三个测试类全部改崩；③ #27 的真实机制是 `nanoTime() % 10^7` 的**周期只有 10 ms**（取的是纳秒低位），不是"10^7 空间里撞两次"，故修法是**换时间源**（保持 11 位不变），不是加宽位数；④ 碰撞后果是唯一索引 `uniqe_key_phone` 报错变红（响亮），不是静默串扰，不得夸大成正确性缺陷；⑤ 另有一批 `nanoTime() % 100_000_000L`（周期 100 ms）是同一缺陷的较弱形式，**有意不在 T5 范围内**，不得记成"已修好"。
-- **顺序约束（订正：T5 不能与 T4 并行）**：T4 的返工与 T5 都改同一批测试类（`ReservationBatchLifecycleTest` 等），且在同一个工作目录里落盘，并行会互相覆盖。**T5 必须在 T4 完成并提交之后串行执行。** 本文档初稿写的"与 T4 并行"作废。
-- **Constraints**：只加固判据与夹具，**不得**削弱任何断言；不改动被加固用例的**业务断言本身**。
-- **Acceptance**：#17/#27 加固后全量测试通过；并给出"加固前后该用例的通过状态"对照，证明加固没有把用例改废。
-- **Validation**：`mvn clean test`。
+- **What（原计划）**：§3.10 的 #17 P2-26（分页用例收窄）、#27 P2-27（手机号随机空间）。**#22 已撤销**（实测其判据自证已存在，见 §3.10 表内说明）。
+- **执行结果（实测）**：**两项的前提都被证伪，T5 最终没有任何代码改动落库。**
+  - **#26 不改**：该分页用例本来就是确定的（`ORDER BY b.id DESC` + 被断言的两行是最后创建、id 最大 + 两条 `assertFalse` 由 WHERE 保证）。阴性对照 W3：去掉 `equipmentId` 过滤重跑仍 **21/21 全绿**。详见 §3.10「#26 订正」。
+  - **#27 撤销**：机制假设（10 ms 周期导致跨类撞号）被 W1 决定性反证——把两个类的后缀钉成同一常数后仍**全绿**；阴性对照 W2：改回旧纳秒表达式后四类 **67 例仍全绿**。三个测试文件已 `git checkout` 恢复原样并核对与 HEAD 逐字节一致。详见 §3.10「订正四」。
+- **一度落地又被撤销的中间态（如实登记）**：Codex 曾按我的任务包把三处 `phoneSuffix` 改成毫秒取模并加了注释；我在证伪该机制后撤销，**撤销操作由我用 `git checkout --` 直接执行**（原因：Codex 于 16:02 前触发用量上限不可用；该操作是"还原到 HEAD"而非编写实现代码，且以 `git diff --stat` 空输出自证逐字节一致）。撤销过程中因该改动未暂存，`git checkout --` 同时丢弃了 `ReservationBatchLifecycleTest` 的 #26 加固，这也是 T5 最终零改动的直接原因之一；两者结论一致（均不需改动），故不再重新引入。
+- **顺序约束（T4 已提交，已满足）**：T4 的返工与 T5 都改同一批测试类，必须在同一工作目录里串行。T4 提交于 `7f3081f`，T5 在其之后执行。
+- **Acceptance（按实际结论重写）**：原验收标准"加固后全量测试通过 + 加固前后对照"随缺陷证伪而作废。**实际验收**改为：证明两项均无判别力（W1/W2/W3 三项阴性对照）+ 最终状态与 T4 提交后逐字节一致 + 四类 67 例全绿。
+- **Validation（实际执行）**：`mvn -o test -Dtest='ReservationBatchLifecycleTest,ReservationMqTest,ReservationPublishFailureTest,ReservationSubmitTest'` → **67 例 0 失败 0 错误**；`mvn -o -q test-compile` 退出码 0。
 
 ### T6 — 文档（Claude 自己做，不派发）
 
