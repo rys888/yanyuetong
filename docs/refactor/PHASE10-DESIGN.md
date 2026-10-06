@@ -284,7 +284,9 @@
 
 **实际设计**：删除前统计 `tb_equipment` 中 `laboratory_id = {id}` 的行数，> 0 则抛 `BadRequestException("该实验室下仍有 N 台设备，请先转移或删除设备")`（文案给出数量，便于自助判断）。检查与删除放在同一 `@Transactional` 方法内——`SELECT` 与 `DELETE` 同事务，足以覆盖本项目的使用场景；**"检查-删除"不是原子操作**（表上无外键约束，两个并发删除请求理论上可交错），登记为已知边界：本项目无并发删实验室的场景，且代价仅为一条孤儿引用，不引入悲观锁/新机械。
 
-**契约变更**：这是**行为变更**（原先能删的现在会被拒），必须在 README「API 示例 / 已知边界」与 `MIGRATION_STATUS.md` 显式登记，并单独测试用例覆盖"有依赖 → 拒绝 + 实验室仍在"与"无依赖 → 仍可删"两组。
+**实现约束（依赖方向，否则启动即失败）**：`LaboratoryServiceImpl` **必须直接注入 `EquipmentMapper`**，**不得注入 `IEquipmentService`**——后者（`EquipmentServiceImpl:35`）已经注入了 `ILaboratoryService`，反向注入会构成 **Spring 循环依赖**（`LaboratoryServiceImpl → EquipmentServiceImpl → LaboratoryServiceImpl`）。注入 `BaseMapper` 不引入服务层依赖，图仍是单向的。同理聚合方式用 `equipmentMapper.selectCount(...)`，不借道服务层。
+
+**契约变更**：这是**行为变更**（原先能删的现在会被拒），必须在 README「API 示例 / 已知边界」与 `MIGRATION_STATUS.md` 显式登记，并单独测试用例覆盖"有依赖 → 拒绝 + 实验室仍在"与"无依赖 → 仍可删"两组。既有 `LaboratoryOwnershipTest.shouldRejectDeletingOtherAdministratorsLaboratory`（`:116`）只覆盖"非归属者被拒"，**不覆盖**"归属者但有设备依赖"这条新路径。
 
 ### 3.7 [决策] P1 修复 F3：`admin_user_id` 不外泄
 
@@ -316,7 +318,17 @@
 
 **现状链**：`listStale` = `WHERE status IN (非终态) AND update_time < before ORDER BY update_time ASC, request_id ASC LIMIT n`；`reconcile` 的 catch 分支**只 `log.error`，不触库** ⇒ 持续失败的行 `update_time` 恒定最旧 ⇒ **每轮独占队首的 n 个名额**，其后已达阈值的陈旧行永久饥饿。
 
-**设计**：在 catch 分支内，用**既有且已被测试覆盖**的 `recordFailReason(requestId, "RECONCILE_ATTEMPT_FAILED")` 写一次失败原因。由于 `update_time` 是 `ON UPDATE CURRENT_TIMESTAMP`，该行随即移到队尾 ⇒ **饥饿消除**；同时账本上留下审计线索（原先只有日志，库里无痕）。
+**设计**：在 catch 分支内，用**既有且已被测试覆盖**的 `recordFailReason(requestId, "RECONCILE_ATTEMPT_FAILED")` 写一次失败原因，**并在同一条 UPDATE 里显式 `SET update_time = now()`**。该行随即移到队尾 ⇒ **饥饿消除**；同时账本上留下审计线索（原先只有日志，库里无痕）。
+
+**为什么"显式 set"不是冗余（实测推翻了我自己的假设）**：`tb_reservation_request.update_time` 确实是 `on update CURRENT_TIMESTAMP`（实测 `information_schema`），但**它不能替代显式赋值**：MySQL 的自动更新只在"行内其他列的值确实改变"时触发，同值写是 no-op。实测（临时库 `hmdp_p10_ts`，三行同为 `2020-01-01`）：
+
+| 语句 | 结果 |
+|---|---|
+| `UPDATE t SET v='A' WHERE id=1`（v 原值就是 'A'） | `update_time` **保持 2020-01-01 不变** |
+| `UPDATE t SET v='B' WHERE id=2`（v 确实改变） | 自动更新为当前时间 |
+| `UPDATE t SET update_time=NOW() WHERE id=3`（其余列不动） | 更新为当前时间 |
+
+后果：`fail_reason` 从 NULL 写成 `"RECONCILE_ATTEMPT_FAILED"` 只有**第一次**是"值改变"，第二次起写的是同一个字符串 ⇒ UPDATE 退化为 no-op ⇒ `update_time` 不动 ⇒ **修复只在第一轮有效**，该行此后仍每轮占据队首名额。所以必须显式赋值——这不是风格偏好，是修复能否成立的前提。
 
 **为什么不是游标**：游标要新增持久化状态（Redis 不持久 / 新表要 DDL），属"新机械"；而写 `fail_reason` 是**已有能力 + 一次 UPDATE**，且顺带提升可观测性。
 
@@ -333,9 +345,13 @@ LIMIT #{limit}
 
 `catch` 同样只 `log.error`（`:166-169`）⇒ 队首行永久失败则恒占名额。**后果比第一处更严重**：`quota_released` 永远不置 1，那条已取消预约占的 Redis 名额**永久泄漏**，实验室显示有空位却约不上——是资源泄漏，不只是对账延迟。
 
-**为什么两处都要修**：同一个 `ORDER BY 时间列 ASC LIMIT n` + catch 不触库的写法，只在 `reconcile` 修掉等于留一半。**修法不能照抄**：`tb_reservation` **没有** `fail_reason` 列（实测列清单：`id/user_id/batch_id/create_time/update_time/status/quota_released/active_flag`），因此改用**显式 bump 既有的 `update_time`**（`LambdaUpdateWrapper.set(Reservation::getUpdateTime, now())`，WHERE 只按 id）。这不引入任何新列、新表、新脚本——按本文档自己在上一段立的取舍标准（"加列要 DDL = 新机械"），这是唯一不越线的选择。
+**为什么两处都要修**：同一个 `ORDER BY 时间列 ASC LIMIT n` + catch 不触库的写法，只在 `reconcile` 修掉等于留一半。**修法不能照抄**：`tb_reservation` **没有** `fail_reason` 列（实测列清单恰为 7 列：`id, user_id, batch_id, status, quota_released, create_time, update_time`——**没有** `active_flag`，初稿从旧文档抄错了，一并更正），因此只用**显式 bump 既有的 `update_time`**（`LambdaUpdateWrapper.set(Reservation::getUpdateTime, now())`，WHERE 只按 id）。这不引入任何新列、新表、新脚本——按本文档自己在上一段立的取舍标准（"加列要 DDL = 新机械"），这是唯一不越线的选择。
 
-**新增测试**：构造 `n+1` 条陈旧行，其中**第 1 条（最旧）的补偿必然失败**（`@SpyBean` 让 `rollback` 对该 batchId 抛异常），断言 ①本轮 `failed=1` 且 ②该行 `fail_reason` 已写入 ③**下一轮 `listStale` 不再选中它**（即它已不在最前），而第 n+1 条能被处理到。这是本轮**唯一的新增行为级测试**，也是 F-C 修复的判别力证据。第二处（`releasePendingQuotas`）**同样要一条判别力用例**：让最旧的 CANCELLED 行 rollback 抛异常，断言它的 `update_time` 被推进、下一轮 `selectPendingQuotaReleases` 不再把它放在窗口首位。
+**长期失败行必须每次都能被推动**：两处的 bump 都必须是**无条件、显式**的赋值，不能依赖 `ON UPDATE CURRENT_TIMESTAMP`（理由见上节实测）。否则第二处会退化成"泄漏一次就永久泄漏"。
+
+**已有的判别力证据（比新增用例更硬）**：`ReservationReconcileTest.shouldLeaveRequestNonTerminalWhenRollbackThrows`（`:226-247`）**断言的正是被本次修复推翻的旧行为**：`:237` `assertNull(stored.getFailReason())`（"失败不留痕"）、以及 `:241-246` 第二轮 `assertSummary(recovered, 1, …)`（"下一轮立刻重扫到"）。修复后这两处**必然变红**——这就是 F-C site 1 的"变红"型证据。该用例必须**改写成新契约**：失败后 ①`fail_reason` 有痕、②`update_time` 被推进、③在阈值窗口内不再被 `listStale` 选中；并保留"最终仍能恢复"的断言——把该行再度人为置陈旧（`update_time` 回拨 > 阈值）后下一轮必须恢复成功。**注意不要为了让旧断言继续通过而弱化修复**。
+
+**新增测试**：构造 `n+1` 条陈旧行，其中**第 1 条（最旧）的补偿必然失败**（`@SpyBean` 让 `rollback` 对该 batchId 抛异常），断言 ①本轮 `failed=1` 且 ②该行 `fail_reason` 已写入 ③**下一轮 `listStale` 不再选中它**（即它已不在最前），而第 n+1 条能被处理到。第二处（`releasePendingQuotas`）**同样要一条判别力用例**：让最旧的 CANCELLED 行 rollback 抛异常，断言它的 `update_time` 被推进、下一轮 `selectPendingQuotaReleases` 不再把它放在窗口首位。两处的夹具都必须**显式写入各自不同的 `update_time`**（不要靠插入时刻的自然先后——`timestamp` 只有秒精度，同一秒内插入的多行会并列，排序退化为按 id），否则用例本身不确定。
 
 **诚实登记（副作用）**：`tb_reservation.update_time` 同时被 `ReservationVO` 作为 `updateTime` 返回给前端（`ReservationVO:42`），所以"补偿失败"会让该预约的"最后更新时间"看起来被刷新了一次。已确认**没有任何测试**断言该语义（`grep update_time src/test/` 仅命中两行注释），影响仅为可观测性上的轻微失真，登记于 README 已知边界。
 
@@ -365,9 +381,18 @@ LIMIT #{limit}
 
 **README.md（新建）**：按 §10.5 的 15 节写全——① 项目简介 ② 项目背景（含"由黑马点评课程项目重构而来"的诚实交代）③ 技术栈 ④ 核心功能 ⑤ 系统架构 ⑥ 高并发预约流程 ⑦ Redis 设计 ⑧ RabbitMQ 可靠性 ⑨ 数据一致性设计 ⑩ 数据库设计 ⑪ 启动方式（JDK 8 + `application-local.yaml` + 脚本执行顺序）⑫ 环境依赖 ⑬ API 示例 ⑭ 项目亮点 ⑮ 已知边界（**本文档 §3.12 的登记项 + 管理员取权方式 + 历史凭据 + 库名 `hmdp`**）。
 
-**`LOGIN_USER_TTL`**：`36000L`（25 天）→ 缩短。因为 `RefreshTokenInterceptor` 每次请求都续期，缩短到 **30 分钟**对活跃用户无感，却把"token 泄漏后的可用窗口"从 25 天压到 30 分钟。改动点只有 `RedisConstants` 一行；需检查测试是否依赖该常量（若无则零回归）。
+**`LOGIN_USER_TTL`**：`36000L`（25 天）→ **`30L`**。因为 `RefreshTokenInterceptor` 每次请求都续期，缩短到 **30 分钟**对活跃用户无感，却把"token 泄漏后的可用窗口"从 25 天压到 30 分钟。改动点只有 `RedisConstants` 一行。
 
-**#25 P2-22 发布失败文案**：`publish` 的 `SET NX` 拒绝分支与条件 UPDATE 的 CAS 拒绝分支目前复用同一句「批次状态已变化，发布失败」。改为两句可区分文案（如"批次状态已变化/被并发修改"vs"发布占用标记已存在，疑似重复发布"），保留原有错误码，便于排障。
+**单位必须核对（否则会改错 60 倍）**：`LOGIN_USER_TTL` 的单位是**分钟**（`UserServiceImpl:94` 与 `RefreshTokenInterceptor:44` 都是 `expire(key, LOGIN_USER_TTL, TimeUnit.MINUTES)`），`36000` 分钟 = 25 天。目标 30 分钟 ⇒ 新值 `30L`，**不是** `1800L`（那是按秒理解会写出的值，实际会变成 30 小时）。
+
+**证据现状（诚实登记）**：全仓 `src/test` 内**没有**任何断言涉及登录 token 的 TTL（`grep -rn "getExpire|LOGIN_USER_TTL|login:token" src/test/java/` 只命中 3 处，全是预约域 Redis key 的 TTL，与登录无关）。因此本项**无"变红"型证据**，只能靠"常量值 + 两处调用点的单位"人工核对。按 §3.13 第 11 条登记。
+
+**#25 P2-22 发布失败文案**：`publish` 的 `SET NX` 拒绝分支与条件 UPDATE 的 CAS 拒绝分支目前复用同一句「批次状态已变化，发布失败」。改为两句可区分文案，**保留原有错误类型 `BadRequestException`（HTTP 400）不变**：
+
+- `:133-135`（`setIfAbsent` 未返回 TRUE，即 Redis 里已存在发布占用标记）→ `"发布占用标记已存在，疑似重复发布"`；
+- `:148-155`（条件 UPDATE 影响 0 行，即 CAS 被并发修改挤掉）→ `"批次状态已被并发修改，发布失败"`。
+
+**证据现状（诚实登记）**：全仓测试**没有**任何一处断言这两句文案（`grep` 命中的只是夹具名称里恰好含"预约发布失败"字样，`ReservationPublishFailureTest` 整类讲的是**提交预约**的失败补偿，与批次发布无关）。分支一（SET NX 拒绝）可以**确定性**构造：调用 `publish` 之前手动在 Redis 写入 `reservation:batch:quota:{id}`，即必然走到该分支——要求补一条断言新文案的用例。分支二（CAS 拒绝）需要"读之后、CAS 之前"改变库中状态，构造更绕，**若无法确定性构造就如实说明并登记为无证据**，不得为凑证据写不确定的用例。
 
 ### 3.12 [决策] 明确"不做"并登记为已知边界
 
@@ -392,7 +417,7 @@ LIMIT #{limit}
 6. **README 章节**：15 节逐节核对存在且非空。
 7. **数据库**：死表已 DROP（`information_schema` 复核）；在用 4 表 + 种子数据（`tb_equipment` 12 / `tb_laboratory` 4）未损；`tb_user` 行数未变。
 8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 无 `reservation*` / `lock:reservation*`；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
-9. **差别力实验（变体法）**：对本轮**新增/修改的行为**逐个做"改坏 → 目标用例变红 → byte-exact 复原 + SHA-256 核对"。至少覆盖：F4 依赖检查、F3 VO 不外泄、F-C 退避、P2-25 状态码、`LOGIN_USER_TTL`（若测试可判）。
+9. **差别力实验（变体法）**：对本轮**新增/修改的行为**逐个做"改坏 → 目标用例变红 → byte-exact 复原 + SHA-256 核对"。可做变体实验的：F4 依赖检查、F3 VO 不外泄（只能验到"响应体字段"这一层，见 §3.7）、F-C 两处退避、P2-25 状态码、P2-22 分支一文案。**已确认无法做变体实验**（因而只能人工核对并登记）：`LOGIN_USER_TTL`（全仓无 TTL 断言）、F3 的"既有用例变红"（`LaboratoryOwnershipTest` 断言的是读库结果）、P2-22 分支二（若无法确定性构造）。
 10. **P0/P1/P2 审计表**：§10.7 三档逐条给结论与证据；P0 必须为零。
 11. **诚实登记**：凡无变体强度证据的改动（纯文案/日志/常量类）在 Review 中显式标注"无判别力证据"，不冒充已验证。
 
@@ -431,18 +456,18 @@ LIMIT #{limit}
 
 ### T4 — P1/P2 行为修复（与 T2/T3 并行）
 
-- **What**：§3.6 F4（实验室依赖检查 + 新测试）、§3.7 F3（`LaboratoryVO` 不外泄 `admin_user_id`）、§3.8 P2-25（异常兜底状态码 + 新增 `HttpMessageNotReadable` 处理）、§3.9 F-C（catch 内写 `recordFailReason` + §3.9 的判别力测试）、§3.11 `LOGIN_USER_TTL`、§3.11 P2-22 发布失败文案。
-- **Constraints**：每项独立、最小；不改已验收的定序/CAS/Lua；F4 的契约变更与 F3 的响应体变更必须**单独可辨**（各自独立提交片段，便于 Review 拆分）。
+- **What**：§3.6 F4（实验室依赖检查 + 新测试）、§3.7 F3（`LaboratoryVO` 不外泄 `admin_user_id`）、§3.8 P2-25（异常兜底状态码 + 新增 `HttpMessageNotReadable` 处理）、§3.9 F-C **两处**（`reconcile` catch 写 `recordFailReason` + `releasePendingQuotas` catch 显式 bump `update_time`，两处都必须显式赋值、不得依赖 `ON UPDATE CURRENT_TIMESTAMP`）、§3.9 的既有用例 `ReservationReconcileTest.shouldLeaveRequestNonTerminalWhenRollbackThrows` 改写成新契约、§3.11 `LOGIN_USER_TTL`（`30L`，单位是分钟）、§3.11 P2-22 发布失败文案拆分。
+- **Constraints**：每项独立、最小；不改已验收的定序/CAS/Lua；F4 的契约变更与 F3 的响应体变更必须**单独可辨**（各自独立提交片段，便于 Review 拆分）；F4 必须注入 `EquipmentMapper` 而**非** `IEquipmentService`（否则循环依赖）；F4 中 `assertManageable` 必须仍在依赖检查**之前**（否则 `shouldRejectDeletingOtherAdministratorsLaboratory` 会从 403 变成 400）。
 - **Acceptance**：新增/修改的每项都有对应测试；全量测试通过；对 F4/F3/F-C/状态码四项给出"改坏后哪些用例变红"的自测记录（供 Claude 做变体实验时比对）。
 - **Validation**：`mvn clean test`；逐项列出测试名。
 - **注意（写进任务包）**：若既有用例因 P2-25 状态码变更而变红，**先假定是既有断言写错了契约**（Phase 6 设计已更正为"应区分 400/500"），不要顺手把断言改成迁就实现；任何对**既有**测试的修改必须在汇报中单独列出并说明理由。
 
 ### T5 — 测试卫生（与 T4 并行）
 
-- **What**：§3.10 的 #22（语句 id 判据自证）、#17 P2-26（分页用例收窄）、#27 P2-27（手机号随机空间）。
+- **What**：§3.10 的 #17 P2-26（分页用例收窄）、#27 P2-27（手机号随机空间）。**#22 已撤销**（实测其判据自证已存在，见 §3.10 表内说明），本任务不再包含它。
 - **Constraints**：只加固判据与夹具，**不得**削弱任何断言；不改动被加固用例的**业务断言本身**。
-- **Acceptance**：#22 的加固要能被证伪（人为让拦截器匹配不到 → 新断言必须变红）；#17/#27 加固后全量测试通过。
-- **Validation**：`mvn clean test` + 对 #22 的证伪记录。
+- **Acceptance**：#17/#27 加固后全量测试通过；并给出"加固前后该用例的通过状态"对照，证明加固没有把用例改废。
+- **Validation**：`mvn clean test`。
 
 ### T6 — 文档（Claude 自己做，不派发）
 
