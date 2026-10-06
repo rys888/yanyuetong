@@ -724,6 +724,50 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 
 ---
 
+### F3 验收实测记录（2026-10-06，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain -uall` 恰好 **17 项 = 13 新增 + 4 修改**，与任务包白名单逐条吻合；`src/**`、`pom.xml`、`README.md`、`docs/**`、`package-lock.json`、`vite.config.js` 零接触；F1/F2 已交付文件（含 `statusMap.js`、`enums.js` 与三个 verify 脚本）零接触；`package.json` 只多一行 `check:browse`。17 个文件**逐个读过全文**，不是只看 diff。
+
+**最关键的一条证据——尺子没有被改短**：Codex 交付的 `verify-browse.mjs` 与**实现之前**写下的那份 RED 草稿 **sha256 逐字节相同**（`73be429874016dacb134253fd193f4adb58443e2606b595e7c0de5043162d9c6`）。草稿成文于实现之前，它相同即证明 Codex **没有在实现完成后回头改写断言来迁就实现**——正是台账里"实现过度概括并改写上个 Phase 契约用例"那个坑。RED→GREEN 是真实的。
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `node scripts/verify-browse.mjs`（无 env） | **19 PASS / 0 FAIL / exit 0** | 纯函数 14 + 路由表 4 + 静态文本 1 |
+| `VERIFY_BACKEND=…:18081 VERIFY_TOKEN=<token> node scripts/verify-browse.mjs` | **37 PASS / 0 FAIL / exit 0** | B 组真机契约；Codex 沙箱连不上 loopback，**全部 SKIP**，由我补跑 |
+| `npm run check:request` | **22 PASS / 0 FAIL**（带 token 26） | 验收③。Codex 侧因沙箱 `listen EPERM` 崩溃、**从未跑通** |
+| `npm run check:session` | **24 PASS / 0 FAIL** | 3 条需登录码的检查未跑（非 F3 判据） |
+| `npm run build` | **exit 0**，248 ms | 仅既存大 chunk 警告 |
+| **浏览器行为验证（我另写）** | **40 PASS / 0 FAIL** | 覆盖验收⑪的 14 步人工项 |
+| **控制台噪音扫描** | **0 条** error/warning/异常 | 走遍 20 条路径，含全部边界 |
+| 静态判据 A–E（视图无 HTTP 配置/无裸 url‑method/无接口路径/无裸状态比较；api·utils·constants 无 `pageSize`） | **全部为空** | 我自己复跑，未采信 Codex 侧结论 |
+
+**Codex 侧的一处盲区，我补上了**：B 组对 `createTime` **只断言字段"存在"、没断言"形状"**。若后端把 `LocalDateTime` 发成数组，`formatDateTime` 会一声不响地把所有时间渲染成「—」，而 B 组照样全绿。直接看原始 JSON 关掉该缺口：`createTime`/`updateTime` 是 ISO 字符串 `"2026-10-03T18:00:48"`（dayjs 可解析，浏览器实测渲染出 `2026-10-03 18:00:48`）、`status` 是枚举**名字符串**、`bookingEnabled` 是真**布尔**、id 经 json-bigint 仍是 **number**。字段名同时对 `EquipmentVO.java`/`LaboratoryVO.java` 源码与原始 JSON 双向核对——`laboratoryId`/`usageRequirement`/`laboratoryName` 这类若拼错，详情页会静默渲染空白。
+
+**两条 not-found 通道的行为分支实测区分**（F3 的核心不对称，§1.1 的五通道落到页面上）：`/laboratories/999999` → `Result.ok(null)` 200 → 「实验室不存在」且**未被误判成「加载失败」**；`/equipment/999999` → `Result.fail` 200 → 「设备不存在」；`/equipment/abc` 与 `/laboratories/abc` → **零请求、零 5xx**，本地 `isNumericId` 拦住了后端必 500 的那条路。
+
+**证伪实验（浏览器仪器，6 个变体各自针对一个独立主张；复原后 16 文件对冻结指纹 `shasum -c` 全 OK）**：
+
+| 变体 | 改坏什么 | 实测 | 结论 |
+|---|---|---|---|
+| 基线 | 无 | **40 PASS / 0 FAIL** | —— |
+| V1 | 实验室详情 ok+null 分支改成报错态 | 39 PASS / **1 FAIL**，恰好 3b | 有判别力 |
+| V2 | 去掉非数字 id 本地拦截 | 37 PASS / **3 FAIL**（9a/9b/9c）——**后端真的吐了 500** | 有判别力，且证明 9c 非空转 |
+| V3 | 菜单高亮退回 `route.path` | 38 PASS / **2 FAIL**，恰好两条详情页失高亮 | 有判别力 |
+| V4 | 去掉越界页码自愈 | 38 PASS / **2 FAIL**（5a/5b） | 有判别力 |
+| V5 | `buildEquipmentQuery` 状态白名单失效 | node 仪器 18 PASS / **1 FAIL** | 有判别力 |
+| V6 | `PAGE_SIZE` 改 10 | node 仪器 17 PASS / **2 FAIL** | 有判别力 |
+
+**我的仪器自身先有 3 个缺陷（一并记录，与 F2 那条同族）**：① 名称输入框选择器取到了 `el-select` 的内部 `input`（筛选面板前两个 `input` 都是 select 的），必须按 `placeholder` 定位；② 9c 按 **URL** 而非**状态码**判定，把文档响应 `http://localhost:5175/equipment/abc`（200）数成了"500"。**基线跑出的 3 个 FAIL 全是我的错、不是 F3 的错**，定位修正后才得到 40/0。再次印证：失败数量与预期不符时先怀疑装置。
+
+**Review 发现的问题（均为 nit，不构成返工）**
+1. `LaboratoryListView.changePage` 用原始 `route.query`，而 `EquipmentListView.changePage` 用清洗后的 `params`——同一功能两套写法。无害（`buildLaboratoryQuery` 只认 `current`），但应统一。
+2. 名称输入框的 `clearable` 清除叉**不提交**，而三个下拉框清除**即刻生效**。符合任务包（名称经 Enter/查询提交），但与下拉框行为不一致。
+3. `unauthorized` 静默 `return` 会让 `state` 停在 `loading`（转圈不结束）。这是任务包要求的写法、且全局 handler 确实会跳转；但万一跳转失败，失败形态是**无限转圈而非报错**。F3 起全局 handler 才承重（见 F2 补录的结构性结论），这条留待 F11 统一收口。
+
+**仍未覆盖**：`check:session` 的 3 条需登录码的检查（属 F2 范畴）；四个页面的「简洁/现代/高校科研感/克制」观感判断**只能由人眼确认**，不在任何自动判据内。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**
@@ -766,6 +810,12 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 2. **后端缺什么**：`GET /reservation/{id}` 仅允许本人（实测管理员访问他人预约 → `403 "无权查看该预约"`），没有管理端详情端点。
 3. **是否必须**：**不必须**——`GET /reservation/manage/page` 返回的 `ReservationVO` 已含设备名/实验室名/使用时段/状态/`quotaReleased`，足够核验。
 4. **推荐最小修改**：**无**。前端用列表行内抽屉展示，不新增端点。
+
+**D-13 · 实验室列表被固定分页钳死，设备筛选的"实验室"下拉最多只能列 5 个**（**F3 实测发现**，即 G-F3-1）
+1. **页面需要什么**：`/equipment` 的"全部实验室"下拉需要**全部**实验室作选项，否则用户选不到第 6 个及以后的实验室。
+2. **后端缺什么**：`GET /laboratory/list` 是**分页端点**且页大小被 `SystemConstants.DEFAULT_PAGE_SIZE = 5` 硬钳（实测：带 `pageSize=2` 也被忽略，仍返回 4 条），**没有** `/laboratory/all` 之类的全量端点。当前种子只有 4 个实验室，一页装得下，所以**今天不露馅**；实验室数一旦超过 5，下拉就会静默少列（**是静默少列，不是报错**——这类缺陷最难发现）。
+3. **是否必须**：**不必须**（当前数据完全够用），但属于"数据一涨就静默错"的类型，登记备查。
+4. **推荐最小修改**：给 `/laboratory/list` 的 Query DTO 加**可选** `pageSize`（服务层钳上限，如 ≤100），前端下拉传 `pageSize=100`。**纯增量参数，不改既有返回结构**。注意这与 D-6「所有分页固定 5 条/页」是同一根因的两面——D-6 建议不改（影响管理端观感），本条建议改（影响正确性）。
 
 ### C 类（仅登记，不建议改）
 

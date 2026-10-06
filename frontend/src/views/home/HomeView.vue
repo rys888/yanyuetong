@@ -1,7 +1,10 @@
 <template>
   <section class="placeholder-card" aria-labelledby="home-title">
     <h1 id="home-title">首页</h1>
-    <p class="phase-note">实验室与设备浏览将在 F3 实现。</p>
+    <p class="phase-note">
+      <RouterLink to="/laboratories">浏览实验室</RouterLink>
+      <RouterLink to="/equipment">浏览设备</RouterLink>
+    </p>
 
     <dl class="identity-list">
       <div>
