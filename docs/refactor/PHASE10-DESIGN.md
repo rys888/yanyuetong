@@ -475,6 +475,11 @@ LIMIT #{limit}
 
 ### 3.13 验收清单（Claude 侧执行，全部判据必须先自证）
 
+> **本清单已有可复跑版本：`bash scripts/verify-acceptance.sh`**（`scripts/` 下，入库）。
+> 它把第 2/3/4/5/6 条的判据连同**白名单与期望条数**一起编码，自带三项自证，任何一项不符就返回非 0。
+> 可选参数：`SCAN_SECRETS='值1 值2'` 启用字面量口令检查（脚本自身入库，故不内嵌任何口令字面量）；`PHASE_BASE=<commit>` 启用第 4 条的禁改清单检查。
+> 第 1 条（`mvn` 编译与全量测试）脚本不做——它需要 JDK 8 与三个中间件，属人工执行。
+
 1. **编译/测试**：`mvn clean compile` 与 `mvn test` —— 记录 `Results:` 行与真实退出码（**不取管道退出码**）。
 2. **命名零残留**：`grep -rn 'com\.hmdp\|hm-dianping\|HmDianPing' src/ pom.xml` 计数 = 0；`grep -rn '"com\.hmdp' src/` = 0（字符串形式单独查）。**T4 前基线实测（HEAD `11ba413`）：A 旧包名 / B 旧坐标 / C 旧主类 / D `虎哥` / E `黑马|itheima` / F 字符串形式包名 —— 六项全部 0 命中；`hmdp` 唯一出现点是 `application.yaml:10` 的 JDBC URL 库名（白名单）。扫描器自证：120 个文件含 `com.yanyuetong`。**
 3. **§10.1 关键词**：对 `shop/voucher/seckill/blog/follow/dianping/geo/sign/bitmap/hyperloglog` 在**黑马语义**下逐个判定（先给出"应该为 0 的判据"，再用已知为"有"的样本自证判据有效）。
@@ -484,6 +489,8 @@ LIMIT #{limit}
    **但只靠 `-w` 会漏掉藏在标识符里的形式**（例如假想的 `tb_sign_record`），所以另做了一轮**无词边界**复核，逐个判定命中：`sign` 20 行（全是 `@Signature`(MyBatis 注解)、SQL 类型 `unsigned`、以及 DROP 脚本里的 `tb_sign`）、`like` 1 行（SQL 的 `LIKE` 运算符）、`shop` 3 行（全在 `phase10_drop_legacy_tables.sql` 里，即**必须**写出死表名的清理脚本）、`geo` 1 行（`shouldCountCasConflictAsSkippedAndConvergeOnNextRun` 里的 "Conver**ge**On" 大小写不敏感命中）、`comment` 75 行（SQL `COMMENT` 子句 + DROP 脚本的 `tb_blog_comments`）、`feed` 0 行。**全部为良性**，唯一"真的写了黑马域名"的地方是那份 DROP 脚本——它是功能性必要的（不写出表名就无法清理旧库），且 §3.1 已把 `tb_` 前缀与库名列为例外。
 
    **待用户裁决的收口项**：DROP 执行完毕后，`phase10_drop_legacy_tables.sql` 是否从仓库删除。保留的理由是它是迁移链的一环（新装库不需要、旧库需要）；删除的理由是它是全仓最集中的一份黑马域名清单。**默认保留**，在 README 已知边界里说明它的用途与一次性性质。
+
+   **订正五（写脚本时才发现的记录缺陷，"全部 0 命中"不可复现）**：上面这段的**首句措辞是错的**。把判据写成脚本时实测：同一范围（`find src pom.xml`）、同样带词边界、但**大小写不敏感**时会命中 **10 处** —— `like` 1 处（`EquipmentMapper.xml:24` 的 SQL `LIKE` 运算符）+ 中文 9 处（**全部**在 `phase10_drop_legacy_tables.sql` 的表名注释里）。**这两类在记录基线时就已存在**：`git show 11ba413:...phase10_drop_legacy_tables.sql | grep -cE '秒杀|优惠券|探店|笔记|评论|关注|签到|商铺'` = **9**，`like` 在该提交的代码范围也是 **1**。之所以当初记成 0，是因为首句只写了"词边界"、没钉住"大小写敏感"以及"哪些命中算白名单"，而紧随其后的那段无边界复核**其实已经把 `like` 1 行 / `shop` 3 行 / `comment` 75 行逐条列出并判为良性** —— 两段合读才是完整结论，单读首句会得到一个假的 0。**教训与 §3.13 第 5 条的"自证期望值必须实测"同源：判据里没写死的范围，读者就会按自己的理解复现出不同结果。** 现已由 `scripts/verify-acceptance.sh` 把口径固定为"代码/配置范围恰好 1 处白名单（LIKE 语法）+ SQL 范围恰好 9 处且全在 DROP 脚本"，期望条数一旦变化就报红。
 4. **禁改清单**：`reservation.lua`、`reservationRollback.lua`、`unlock.lua`、`ReservationLifecycleServiceImpl`、`ReservationPersistenceServiceImpl`、`ReservationQuotaRollbackExecutor`、`ReservationQuotaExecutor`、`ReservationRequestStatus`、`ReservationStatus`、`active_flag` DDL —— 用 `git status --porcelain -- <真实路径>` 核验（路径必须先 `find` 定位，不得凭记忆拼）。
 5. **凭据**：全仓库正则扫描（白名单 `change_me` / `your_password_here` / `${...}` / 占位符），命中数 = 0。**扫描必须先自证**（在已知存在的串上命中，如 `package com.yanyuetong` / `spring:`），**文件清单必须用 `find` 或 `git -c core.quotepath=false ls-files`**——默认 `git ls-files` 会把 3 个中文文件名转义成八进制，导致含真口令的那份报告被静默跳过、给出假通过的 0（见 §2.2 实测）。
 
@@ -500,6 +507,7 @@ LIMIT #{limit}
    | `docs/refactor/PHASE10-DESIGN.md` | §2.2 表 + 本节 | **我自己的审计注记逐字复述**——自我引入 | ✅ 已改为只留行号与性质、不复述值 |
    **白名单（不在待清项内）**：`src/main/resources/application-local.yaml:3/5/8`——已由 `.gitignore:37` 忽略且 `git ls-files` 确认未跟踪；`application.yaml` 三处已是 `change_me` 占位、`.example` 模板是 `your_password_here`。**订正**：本文档此前记"3 个文件 4 处"，实测为 **4 个已入库文件**外加本文件自身的复述。
    **T6 后复测（2026-10-06，实测）**：探测器①、③命中 **0**；探测器②仅剩 `guest/guest` 2 行（已判定为公开默认值，见 §2.2「订正二」），**凭据类命中 0**。扫描器自证 A = **3 个非 ASCII 路径**（`docs/plan/` 两份 + `docs/history/RabbitMQ-异步下单迁移交付报告.md`）——**改名后个数不变**（新文件名同样含中文），只是路径变了；自证 B = 121（159 候选口径；`src/ pom.xml` 口径为 120）；自证 C = 0。**教训：自证期望值必须实测后填写，不能按"改了 ASCII 名所以会减少"去推断**——我一度就是这么推断的，实测把它推翻了。
+   **脚本化复核（`scripts/verify-acceptance.sh`，脚本实测）**：凭据扫描范围 **163** 个已入库文本文件（含 `docs/*.md`），自证 D = 范围内确存在 `password` 字样（探测器非恒假）；结构性探测器命中 **2 行，均为白名单 `guest`**，非白名单 0；字面量探测器默认不跑（脚本入库，不内嵌口令），**阴性对照**：`SCAN_SECRETS='guest'` 喂一个已知存在的串 → 正确报出 7 个文件命中，证明该探测器不是空转。**口径差异说明**：本脚本的 163 与上文基线的 159 不是同一清单——脚本按"全部已入库文本文件（含 `.md`/`.sh`/`.example`）"取范围，基线那次是 `find` 全量候选。两个数字都对，别当成矛盾。
 6. **README 章节**：15 节逐节核对存在且非空。
 7. **数据库**：死表已 DROP（`information_schema` 复核）；在用 4 表 + 种子数据（`tb_equipment` 12 / `tb_laboratory` 4）未损；`tb_user` 行数未变。
 8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 残留键 = 0；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
