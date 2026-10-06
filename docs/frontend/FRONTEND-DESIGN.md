@@ -669,7 +669,7 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 | **A. 脚本行为断言（真机可复跑）** | `resolveNavigation` 6 行真值表、`sanitizeRedirect` 10 条 + 3 类非字符串输入、`defaultRouteFor`、`api/request.js` 能在裸 Node 里 import 不抛、以及 3 条真机会话断言（登录返回裸串 token / `/user/me` 的昵称角色 / **登出后旧 token 立刻 401**）。末条是验收④的**判别性**证据：顺序写反（先清本地、不调后端）会拿到 200。 |
 | **B. 脚本静态文本断言（**不是**行为验证）** | `router/index.js` 的 `beforeEach` 段含 `needsProfileFetch(`、不含 `to.meta.public`。这是妥协：该模块 import 了 `.vue`，Node 加载不了。输出里必须标注其性质。**它的能力边界已实测**（见下方 W3）：它锁的是"文本特征在不在"，**不锁调用参数**。 |
 | **C. 仅由我读码确认（无自动判据）** | `main.js` 的 `setUnauthorizedHandler(handleUnauthorized)` 注入时机与 `wasLoggedIn` 判定；`api/request.js` 的 `getToken` 只在箭头函数体内读 store（ESM 循环安全条件）；`stores/user.js` 的 `logout` 用 `try { await logoutApi() } finally { this.reset() }` **先调后端再清本地**——注意脚本只证明了**后端**"登出后旧 token 401"，**没有**证明 store 的调用顺序，两者别混。 |
-| **D. 只能人工点（脚本测不到）** | 三个接线点的浏览器实际行为：① 401 时是否真的跳登录页并带上 `redirect`；② 请求头里是否真的挂上了 `Authorization`；③ `beforeEach` 的真实导航结果（含硬刷新 `/login` 带有效 token 是否被送回首页——即缺陷 1 的修复效果）。F2 提交前这几条以"人工点过"汇报，**不得**记作"脚本证明"。 |
+| **D. 曾只能人工点（脚本测不到）——2026-10-06 已补证，该档覆盖关闭** | 三个接线点的浏览器实际行为：① 401 时是否真的跳登录页并带上 `redirect`；② 请求头里是否真的挂上了 `Authorization`；③ `beforeEach` 的真实导航结果（含硬刷新 `/login` 带有效 token 是否被送回首页——即缺陷 1 的修复效果）。F2 提交前这几条以"人工点过"汇报，**不得**记作"脚本证明"。**2026-10-06 用零依赖 CDP 仪器在真实浏览器中把这三条实测并证伪，D 档至此关闭**（证据见下方「F2 三个接线点浏览器实测补录」）。 |
 
 #### 返工复核（2026-10-06，第 2 轮：修缺陷 1 之后）
 
@@ -689,6 +689,38 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 **W3 的处置（记录为已知代价，不再为此加一轮返工）**：文本锁锁的是标记存在性、锁不住调用参数。要堵 W3 需把断言收紧成钉死整串 `needsProfileFetch({ to, token, profile })` 的正则——但那种写法对格式化极脆，且 W3 是"显式写 `token: null`"这种没人会顺手犯的错；而现实中最可能的回归（"有人又把公开路由门控加回来"）**W1 与 W4 都抓得到**，且 W4 是行为级抓捕。**权衡结论：静态锁保持现状，其边界在此显式登记，不粉饰。**
 
 **这一版 `needsProfileFetch` 语义（`token && !profile`，无公开路由门控）的一个已接受副作用**：带**过期 token** 打开公开页（如不存在的 URL → 404 页）也会触发一次 `fetchMe` → 401 → `handleUnauthorized` 清本地并跳 `/login`。即"会话已死时访问错 URL 会被引导去登录"而不是停在 404 页。**接受理由**：行为统一为"硬进入任何路由恰好校验一次会话"，无特例分支，且能自愈客户端的过期会话；代价仅是一次 GET。
+
+---
+
+### F2 三个接线点浏览器实测补录（2026-10-06，Claude 独立实测，D 档覆盖由此关闭）
+
+**方法**：`git archive HEAD frontend` 取 F2 已提交代码（HEAD = `88f008a`）的**快照**，另起 vite 于 5174 代理到 `127.0.0.1:18081`。用快照而非工作树，是因为此刻 Codex 正在同一仓库并行实现 F3——避免它的中途写入污染证据。仪器为**零依赖** CDP 脚本（Node 22 自带全局 `WebSocket` + headless Chrome `--remote-debugging-port`），不引任何测试框架。脚本：`/tmp/f2-cdp-verify.mjs`。
+
+**三条接线点的实测结果**（11 条断言，全部真机、真后端）：
+
+| 接线点 | 实测证据 |
+|---|---|
+| ① 失效 token 访问受保护路由 | `/api/user/me` **实测返回 401**（确认走的是 401 通道而非别的失败）→ `localStorage` token 变 `null` → 最终 URL `http://localhost:5174/login?redirect=/home` → 落点为真实渲染的登录表单（`input` 存在、body 非空，**非白屏**） |
+| ② 请求头真的挂上 `Authorization` | `/api/user/me` 请求头实测 `authorization` 值**逐字节等于** store 里的 token；后端应答 **200**，首页渲染出真实昵称「小鱼同学」——证明头不只"发出去了"，而是被后端接受并生效 |
+| ③ 硬刷新 `/login` 带有效 token | 整页 `Page.reload` 后停在 `http://localhost:5174/home`，首页正文已渲染——**缺陷 1 的修复效果确认** |
+
+**证伪实验（证明这 11 条"绿"有判别力）** —— 每个变体单独跑，复原后 4 个文件对 `git show HEAD:` 用 `diff -q` 验证 byte-exact：
+
+| 变体 | 改动 | 实测 | 结论 |
+|---|---|---|---|
+| 基线 | 无 | **11 PASS / 0 FAIL** | —— |
+| V1 | 缺陷 1 改回 `if (!to.meta.public && needsProfileFetch(...))` | 9 PASS / **2 FAIL**，恰好测试③两条；body 文本实测变为登录表单 | 有判别力 |
+| V2 | `authorization: token + "X"` | 6 PASS / **5 FAIL**（②三条 + ③两条） | 有判别力 |
+| V3 | `handleUnauthorized` 改空操作 | 11 PASS / **0 FAIL** | **未抓住——该实现冗余** |
+| V4 | 抽掉 `fetchMe` 的 `this.reset()` | 11 PASS / **0 FAIL** | **未抓住——该实现冗余** |
+| V5 | V3 + V4 双抽 | 10 PASS / **1 FAIL**，恰好①的「本地会话已清空」，实测残留 `token = "deadbeefdeadbeefdeadbeefdeadbeef"` | 有判别力（V3/V4 是被另一套实现互相掩盖） |
+| 复原 | 4 文件字节级复原 | **11 PASS / 0 FAIL** | —— |
+
+**V3/V4 是诚实阴性结果**：单独改坏任意一处，断言全绿。两者是**互相掩盖的两套会话清理实现**——`stores/user.js` 的 `fetchMe` 内 `this.reset()` 与 `main.js` 的 `handleUnauthorized`，任一单独存在即满足断言。V5 补的这一刀证明断言非空转。
+
+**由此得到的结构性结论（对 F3 及以后有约束力）**：在 F2 阶段，全局 401 handler 的**效果完全冗余**——`fetchMe` 与路由守卫已覆盖；它的跳转被守卫遮蔽。**它从 F3 起才承重**：列表页是在已渲染页面上发请求，没有守卫会再跑一遍。这正是 F3 任务包要求「页面遇到 `unauthorized` 必须静默 `return`，把处理权交给全局 handler」的原因。
+
+**一次测试装置的缺陷记录**：测试②最初寄生在测试③的导航上（缺陷恢复后 `/login` 不再触发 `fetchMe`，②被殃及），表现为 V1 跑出 5 FAIL 而非预期的精确 2 FAIL。**失败数量与预期不符时先怀疑装置**——给②加了自足前置（`navigate('/login')` → 写 token → `navigate('/home')`）后，V1 才回到预期的 2 FAIL。"跑绿的仪器"本身也必须被证伪。
 
 ---
 
