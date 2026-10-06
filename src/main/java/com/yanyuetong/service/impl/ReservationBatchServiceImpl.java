@@ -131,7 +131,7 @@ public class ReservationBatchServiceImpl
                 ttlSeconds,
                 TimeUnit.SECONDS);
         if (!Boolean.TRUE.equals(quotaCreated)) {
-            throw new BadRequestException("批次状态已变化，发布失败");
+            throw new BadRequestException("发布占用标记已存在，疑似重复发布");
         }
 
         boolean updated = update(null, new LambdaUpdateWrapper<ReservationBatch>()
@@ -151,7 +151,7 @@ public class ReservationBatchServiceImpl
             } catch (RuntimeException ignored) {
                 // MySQL remains authoritative; stale quota has a finite TTL.
             }
-            throw new BadRequestException("批次状态已变化，发布失败");
+            throw new BadRequestException("批次状态已被并发修改，发布失败");
         }
     }
 

@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 public class ReservationReconcileServiceImpl implements IReservationReconcileService {
 
     private static final String NO_RESERVATION_FAILURE_REASON = "RECONCILE_NO_RESERVATION";
+    private static final String RECONCILE_ATTEMPT_FAILED_REASON = "RECONCILE_ATTEMPT_FAILED";
     private static final ReservationRequestStatus[] NON_TERMINAL_STATUSES =
             ReservationRequestStatus.nonTerminalStatuses()
                     .toArray(new ReservationRequestStatus[0]);
@@ -136,6 +137,7 @@ public class ReservationReconcileServiceImpl implements IReservationReconcileSer
                 failed++;
                 log.error("预约请求对账失败：requestId={}，batchId={}，userId={}",
                         request.getRequestId(), request.getBatchId(), request.getUserId(), e);
+                recordReconcileFailureSafely(request);
             }
         }
 
@@ -166,9 +168,30 @@ public class ReservationReconcileServiceImpl implements IReservationReconcileSer
             } catch (Exception e) {
                 log.error("取消预约 Redis 名额补偿失败：reservationId={}，batchId={}，userId={}",
                         reservation.getId(), reservation.getBatchId(), reservation.getUserId(), e);
+                deferPendingQuotaReleaseSafely(reservation);
             }
         }
         return released;
+    }
+
+    private void recordReconcileFailureSafely(ReservationRequest request) {
+        try {
+            reservationRequestService.recordFailReason(
+                    request.getRequestId(), RECONCILE_ATTEMPT_FAILED_REASON);
+        } catch (Exception e) {
+            log.error("预约请求对账失败原因记录失败：requestId={}", request.getRequestId(), e);
+        }
+    }
+
+    private void deferPendingQuotaReleaseSafely(Reservation reservation) {
+        try {
+            reservationMapper.update(null, new LambdaUpdateWrapper<Reservation>()
+                    .eq(Reservation::getId, reservation.getId())
+                    .set(Reservation::getUpdateTime, LocalDateTime.now()));
+        } catch (Exception e) {
+            log.error("取消预约 Redis 名额补偿重试时间推进失败：reservationId={}",
+                    reservation.getId(), e);
+        }
     }
 
     /**

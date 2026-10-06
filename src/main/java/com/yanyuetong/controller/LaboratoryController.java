@@ -1,5 +1,6 @@
 package com.yanyuetong.controller;
 
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yanyuetong.annotation.RequireRole;
@@ -8,6 +9,7 @@ import com.yanyuetong.entity.Laboratory;
 import com.yanyuetong.enums.UserRole;
 import com.yanyuetong.service.ILaboratoryService;
 import com.yanyuetong.utils.SystemConstants;
+import com.yanyuetong.vo.LaboratoryVO;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,6 +21,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
+import java.util.List;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/laboratory")
@@ -29,7 +33,8 @@ public class LaboratoryController {
 
     @GetMapping("/{id}")
     public Result queryLaboratoryById(@PathVariable("id") Long id) {
-        return Result.ok(laboratoryService.getById(id));
+        Laboratory laboratory = laboratoryService.getById(id);
+        return Result.ok(laboratory == null ? null : toLaboratoryVO(laboratory));
     }
 
     @GetMapping("/list")
@@ -40,7 +45,10 @@ public class LaboratoryController {
                 .eq(StrUtil.isNotBlank(campus), "campus", campus)
                 .orderByDesc("id")
                 .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
-        return Result.ok(page.getRecords(), page.getTotal());
+        List<LaboratoryVO> records = page.getRecords().stream()
+                .map(this::toLaboratoryVO)
+                .collect(Collectors.toList());
+        return Result.ok(records, page.getTotal());
     }
 
     @PostMapping
@@ -61,5 +69,9 @@ public class LaboratoryController {
     public Result deleteLaboratory(@PathVariable("id") Long id) {
         laboratoryService.deleteLaboratory(id);
         return Result.ok();
+    }
+
+    private LaboratoryVO toLaboratoryVO(Laboratory laboratory) {
+        return BeanUtil.copyProperties(laboratory, LaboratoryVO.class);
     }
 }

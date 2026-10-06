@@ -45,7 +45,6 @@ import static com.yanyuetong.utils.RedisConstants.RESERVATION_BATCH_QUOTA_KEY;
 import static com.yanyuetong.utils.RedisConstants.RESERVATION_BATCH_USERS_KEY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -64,6 +63,7 @@ class ReservationReconcileTest {
 
     private static final int INITIAL_QUOTA = 4;
     private static final String RECONCILE_FAILURE_REASON = "RECONCILE_NO_RESERVATION";
+    private static final String RECONCILE_ATTEMPT_FAILED_REASON = "RECONCILE_ATTEMPT_FAILED";
     private static final AtomicLong REQUEST_ID_SEQUENCE =
             new AtomicLong(8_800_000_000L + Math.abs(System.nanoTime() % 100_000_000L));
 
@@ -223,9 +223,10 @@ class ReservationReconcileTest {
     }
 
     @Test
-    void shouldLeaveRequestNonTerminalWhenRollbackThrows() {
+    void shouldBackOffFailedRequestAndRecoverAfterThreshold() {
         long requestId = createRequest(PUBLISHED, true);
         occupyQuota();
+        LocalDateTime staleUpdateTime = reservationRequestMapper.selectById(requestId).getUpdateTime();
         doThrow(new IllegalStateException("回滚故障")).doCallRealMethod()
                 .when(rollbackExecutor).rollback(batch.getId(), user.getId());
 
@@ -234,16 +235,83 @@ class ReservationReconcileTest {
         assertSummary(summary, 1, 0, 0, 0, 1);
         ReservationRequest stored = reservationRequestMapper.selectById(requestId);
         assertEquals(PUBLISHED, stored.getStatus());
-        assertNull(stored.getFailReason());
+        assertEquals(RECONCILE_ATTEMPT_FAILED_REASON, stored.getFailReason());
+        assertTrue(stored.getUpdateTime().isAfter(staleUpdateTime));
         assertEquals("3", stringRedisTemplate.opsForValue().get(quotaKey(batch.getId())));
         assertTrue(isUserOccupyingQuota());
 
+        ReconcileSummaryDTO backedOff = reconcileService.reconcile(200);
+        assertSummary(backedOff, 0, 0, 0, 0, 0);
+
+        makeStale(requestId);
         ReconcileSummaryDTO recovered = reconcileService.reconcile(200);
 
         assertSummary(recovered, 1, 0, 1, 0, 0);
-        assertEquals(COMPENSATED, reservationRequestMapper.selectById(requestId).getStatus());
+        ReservationRequest recoveredRequest = reservationRequestMapper.selectById(requestId);
+        assertEquals(COMPENSATED, recoveredRequest.getStatus());
+        assertEquals(RECONCILE_FAILURE_REASON, recoveredRequest.getFailReason());
         assertEquals("4", stringRedisTemplate.opsForValue().get(quotaKey(batch.getId())));
         assertFalse(isUserOccupyingQuota());
+    }
+
+    @Test
+    void shouldAdvanceUpdateTimeWhenSameReconcileFailureRepeats() {
+        long requestId = createRequest(PUBLISHED, true);
+        doThrow(new IllegalStateException("持续回滚故障"))
+                .when(rollbackExecutor).rollback(batch.getId(), user.getId());
+
+        ReconcileSummaryDTO first = reconcileService.reconcile(1);
+
+        assertSummary(first, 1, 0, 0, 0, 1);
+        assertEquals(RECONCILE_ATTEMPT_FAILED_REASON,
+                reservationRequestMapper.selectById(requestId).getFailReason());
+
+        makeStale(requestId);
+        LocalDateTime repeatedFailureStaleTime =
+                reservationRequestMapper.selectById(requestId).getUpdateTime();
+
+        ReconcileSummaryDTO second = reconcileService.reconcile(1);
+
+        assertSummary(second, 1, 0, 0, 0, 1);
+        ReservationRequest stored = reservationRequestMapper.selectById(requestId);
+        assertEquals(RECONCILE_ATTEMPT_FAILED_REASON, stored.getFailReason());
+        assertTrue(stored.getUpdateTime().isAfter(repeatedFailureStaleTime));
+        List<ReservationRequest> nextWindow = reservationRequestService.listStale(
+                LocalDateTime.now().minusMinutes(10), 1);
+        assertFalse(nextWindow.stream()
+                .anyMatch(request -> request.getRequestId().equals(requestId)));
+    }
+
+    @Test
+    void shouldMoveFailedRequestOutOfStaleWindowSoLaterRequestCanProgress() {
+        int limit = 2;
+        LocalDateTime now = LocalDateTime.now();
+        ReservationBatch failingBatch = createBatch(equipment.getId());
+        long failingRequestId = createRequest(
+                PUBLISHED, failingBatch.getId(), now.minusMinutes(14));
+        createRequest(PUBLISHED, batch.getId(), now.minusMinutes(13));
+        long initiallyOutsideWindowId = createRequest(
+                PUBLISHED, batch.getId(), now.minusMinutes(12));
+        doThrow(new IllegalStateException("持续回滚故障"))
+                .when(rollbackExecutor).rollback(failingBatch.getId(), user.getId());
+
+        ReconcileSummaryDTO first = reconcileService.reconcile(limit);
+
+        assertSummary(first, limit, 0, 1, 0, 1);
+        assertEquals(RECONCILE_ATTEMPT_FAILED_REASON,
+                reservationRequestMapper.selectById(failingRequestId).getFailReason());
+        List<ReservationRequest> nextWindow = reservationRequestService.listStale(
+                LocalDateTime.now().minusMinutes(10), limit);
+        assertFalse(nextWindow.stream()
+                .anyMatch(request -> request.getRequestId().equals(failingRequestId)));
+        assertTrue(nextWindow.stream()
+                .anyMatch(request -> request.getRequestId().equals(initiallyOutsideWindowId)));
+
+        ReconcileSummaryDTO second = reconcileService.reconcile(limit);
+
+        assertSummary(second, 1, 0, 1, 0, 0);
+        assertEquals(COMPENSATED,
+                reservationRequestMapper.selectById(initiallyOutsideWindowId).getStatus());
     }
 
     @Test
@@ -382,6 +450,22 @@ class ReservationReconcileTest {
         if (stale) {
             makeStale(requestId);
         }
+        return requestId;
+    }
+
+    private long createRequest(ReservationRequestStatus status, Long batchId,
+                               LocalDateTime updateTime) {
+        long requestId = REQUEST_ID_SEQUENCE.incrementAndGet();
+        ReservationRequest request = new ReservationRequest()
+                .setRequestId(requestId)
+                .setUserId(user.getId())
+                .setBatchId(batchId)
+                .setStatus(status);
+        assertEquals(1, reservationRequestMapper.insert(request));
+        requestIds.add(requestId);
+        assertEquals(1, reservationRequestMapper.updateById(new ReservationRequest()
+                .setRequestId(requestId)
+                .setUpdateTime(updateTime)));
         return requestId;
     }
 

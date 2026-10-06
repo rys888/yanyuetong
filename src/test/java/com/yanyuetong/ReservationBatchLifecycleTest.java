@@ -264,6 +264,19 @@ class ReservationBatchLifecycleTest {
     }
 
     @Test
+    void shouldExplainWhenPublishQuotaMarkerAlreadyExists() {
+        Long id = createBatch(validBatch(equipmentA.getId()), adminA);
+        stringRedisTemplate.opsForValue().set(quotaKey(id), "777");
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> batchService.publish(id));
+
+        assertEquals("发布占用标记已存在，疑似重复发布", exception.getMessage());
+        assertEquals("777", stringRedisTemplate.opsForValue().get(quotaKey(id)));
+        assertEquals(ReservationBatchStatus.DRAFT, batchService.getById(id).getStatus());
+    }
+
+    @Test
     void shouldPublishExactlyOnceAndPreserveQuotaUnderConcurrency() throws Exception {
         Long id = createBatch(validBatch(equipmentA.getId()), adminA);
         int attempts = 8;
