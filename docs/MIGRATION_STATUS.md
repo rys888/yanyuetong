@@ -10,8 +10,8 @@
 本 Phase 交付：残留业务与死代码清除、包名与 Maven 坐标迁移至 `com.yanyuetong`、迁移链重建为编号脚本、
 P1/P2 行为修复、测试卫生核对、4 份根目录文档归置入 `docs/`、全仓凭据脱敏、README 15 节从零撰写。
 
-**DB 层已闭环（2026-10-06）**：10 张历史课程死表已执行 `DROP`（用户逐表确认 → 备份 → 执行 → 幂等复跑 → `information_schema` 复核，详见「Pending」）。
-**剩余未闭环项均在仓库之外**：本机 RabbitMQ 2 个课程死队列、本机 Redis 3 个死域计数键（均需用户点名）、git 历史的明文口令（用户裁决不改写）、首次 push（用户裁决不做）。
+**DB 层与运行环境层均已闭环（2026-10-06）**：10 张历史课程死表已执行 `DROP`；2 个课程死队列与 3 个死域计数键已清除（均为用户点名 → 留档 → 执行 → 复核，详见「Pending」）。
+**剩余未闭环项只在仓库之外**：git 历史的明文口令（用户裁决不改写）、首次 push（用户裁决不做）。
 
 ## Passed
 
@@ -730,14 +730,18 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 | 依赖检查 | 132 个入库源码/配置/SQL 文件（排除 DROP 脚本自身）对这 10 张表名 **0 处引用**；自证：同范围 `tb_equipment` 命中 6 个文件，证明清单确被读到 |
 | 复跑验收 | `bash scripts/verify-acceptance.sh` → **ALL CHECKS PASSED**（exit 0） |
 
-仍未闭环（都在仓库之外，均需用户在一次实时对话里点名后执行）：
+**运行环境层面：已闭环（2026-10-06）** —— 用户在同一轮里点名后，两处残留已清除，均**先留档、后删除、再复核**：
 
-- **本机 RabbitMQ 上的 2 个课程死队列** `hello,queue1` / `hello,queue2`（各积压 1 条消息）**未删除**。
-  仓库里已无引用，删不删都不影响本项目；删除属对 broker 的破坏性操作，等用户决定。
-- **本机 Redis 上 3 个已死域的计数键** `icr:order:2026:10:03` / `icr:order:2026:10:04` / `icr:order:2026:10:05`（均无 TTL）**未删除**。
-  它们是已删除的秒杀/订单域留下的按日自增键；**按日键一旦过了那天就再也不会被读**，故删除不会影响任何在用逻辑。
-  在用的 `icr:reservation:2026:10:04/05/06` 必须保留。
-  以上两项的删除都需要用户在一次实时对话里点名这些键/队列后执行（不可逆）。
+| 目标 | 删前 | 执行 | 删后复核 |
+|---|---|---|---|
+| RabbitMQ 课程死队列 `hello,queue1` / `hello,queue2` | vhost `/` 共 4 个队列；两者 durable、各 1 条消息、`consumers=0`。**先用管理接口 `get` + `ackmode=ack_requeue_true`（只读不消费）取出消息留档**：payload 均为 `'hwllo\r\new'`（教程手敲的 `hello new`，含错字）、来源 `amq.fanout`、`routing_key` 空 —— 确认是课程时代的 fanout 演示消息 | `DELETE /api/queues/%2F/hello,queue1`、`.../hello,queue2` → 均 **HTTP 204** | 只剩 2 个队列（`reservation.create.queue` / `.dlq`，均 `messages=0 consumers=0`）；`amq.fanout` 绑定数 **0**；全 vhost 队列与交换机中含 `hello` 的条目均为 **0** |
+| Redis 死域计数键 `icr:order:2026:10:03` / `:10:04` / `:10:05` | db0 共 6 个键，全为 `icr:*`；这 3 个无 TTL，值 30000 / 570000 / 450000 | `DEL <三个键逐一列名>` → 返回 **3** | `KEYS 'icr:*'` 只剩在用的 `icr:reservation:2026:10:04/05/06`，值 1012 / 1465 / 327 **与删前逐键一致**；三个目标键 `TYPE` 均 `none` |
+
+**未动（有意）**：同机 **db10** 的 `shop:status` / `SHOP_STATUS` 两键 —— **不属于本项目**（本应用用 db0），疑似本机其他项目，不得以"清理残留"为名去动。
+
+**本次为显式覆盖**：RabbitMQ 那两个队列原按 Phase 7 裁决"非本仓产生、明确不动"，Phase 10 亦记为"不删、不碰"；本轮由用户点名后清理，属**用户对范围决定的覆盖**，不是对 Phase 7 技术判断的翻案（已在 `PHASE10-DESIGN.md` §3.13 第 8 条写明）。
+
+仍未闭环（均在仓库之外，需用户决定）：
 - **git 历史中的明文口令未改写**（用户裁决：只清工作区、不动历史）。当前工作区已全部脱敏，
   但**本仓库在公开前必须先改写历史或轮换口令**。仓库未推送到任何公开远端。
 - **首次 push 未做**（用户裁决：只本地提交）。注意 `origin` 指向他人课程仓库，`github` 指向用户自有仓库，**不要执行裸 `git push`**。
@@ -903,9 +907,12 @@ Phase 0–9 的 Review / 设计文档中引用的旧路径按此表对应到新�
     故该修复**无判别力证据**，只登记为"已实施"（见 `PHASE9-REVIEW.md` §「F-B 修复」）
 30. **本机 RabbitMQ 上残留两个课程死队列** `hello,queue1` / `hello,queue2`（durable、非 auto-delete，
     各积压 1 条消息）。声明它们的课程时代监听器/测试类已在 T1 删除，**全仓已无任何引用**
-    （`grep -rn 'hello,queue' src/` = 0）。属 broker 侧状态而非仓库状态 → ⚠️ **T6 新发现，未处理**：
+    （`grep -rn 'hello,queue' src/` = 0）。属 broker 侧状态而非仓库状态 → ⚠️ **T6 新发现**：
     删除属对用户 broker 的破坏性操作，且该 broker 与课程演示共用；已登记，等用户决定
-    （同 `icr:order:*` 的处理方式）
+    （同 `icr:order:*` 的处理方式）→ ✅ **2026-10-06 关闭**：用户点名这两条队列后已删除
+    （删前用 `ack_requeue_true` 取消息留档：payload 均为 `'hwllo\r\new'`、来自 `amq.fanout`，确认是课程时代演示消息；
+    `DELETE` 均返回 HTTP 204；删后 vhost `/` 只剩本项目两个预约队列）。同批关闭的还有
+    `icr:order:*` 三个 Redis 死键。全过程见「Pending」
 
 ## Last Review
 
@@ -924,7 +931,8 @@ Phase 10 Review — PASS — 2026-10-06，详见 `docs/refactor/PHASE10-DESIGN.m
 第 7 条（"死表已 DROP"）**据此判定为已满足**；在用表逐表行数与删前一致（`tb_user` 1013 / `tb_laboratory` 4 /
 `tb_equipment_category` 6 / `tb_equipment` 12 / 4 张预约表 0）；132 个入库源码/配置/SQL 文件对这 10 张表名 **0 处引用**。
 第 8 条只读部分（Redis 6 个 key 全为 `icr:*`、两个预约队列 `messages=0`、DLQ 无死信）DROP 前后均无变化。
-**仍未做**：2 个课程死队列的清理（用户未点名，见「Pending」）。）
+**第 8 条的残留已清（2026-10-06，用户点名后）**：2 个课程死队列 + 3 个 `icr:order:*` 死键已删除，
+删前均留档、删后均复核（详见「Pending」表）；db10 的两个非本项目键**有意未动**。）
 
 
 Phase 8 Review — PASS — 2026-10-05，详见 `docs/refactor/PHASE8-REVIEW.md`

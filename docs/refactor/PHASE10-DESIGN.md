@@ -523,16 +523,22 @@ LIMIT #{limit}
    | `reservation:batch:quota:*` / `reservation:batch:users:*` | 0 | ✅ 这正是"名额泄漏"要查的目标，为空即通过 |
    | `lock:*` | 0 | ✅ |
    | `icr:reservation:*` | 3 | ✅ **预期存在**（`RedisIdWorker` 的按日计数，`ReservationServiceImpl:108` 在用）——**不是**残留，不得当残留删 |
-   | `icr:order:*` | 3 | ⚠️ **残留**：`nextId("order")` 的调用点已随秒杀/订单域删除。全仓 `nextId` 只有 3 处出现：`RedisIdWorker:27` 的声明、生产调用 `ReservationServiceImpl:108`、以及测试桩 `ReservationPublishFailureTest:256`——**后两处的前缀都是 `"reservation"`**，`"order"` 已无处可产生。这 3 个键无 TTL、不会再生 |
+   | `icr:order:*` | 3 | ⚠️ **残留**：`nextId("order")` 的调用点已随秒杀/订单域删除。全仓 `nextId` 只有 3 处出现：`RedisIdWorker:27` 的声明、生产调用 `ReservationServiceImpl:108`、以及测试桩 `ReservationPublishFailureTest:256`——**后两处的前缀都是 `"reservation"`**，`"order"` 已无处可产生。这 3 个键无 TTL、不会再生。**→ ✅ 2026-10-06 已清**（用户点名这 3 个键后 `DEL`，返回 3；删前值 30000 / 570000 / 450000） |
    | `sign:*` / `*shop*` / `*blog*` / `*follow*` / `*voucher*` / `*user*` | 0 / 0 / 0 / 0 / 0 / 0 | ✅ 已删域的键空间全空 |
 
-   所以正确判据是：**`reservation:batch:*`、`lock:*`、以及所有已删域键空间 = 0**；`icr:reservation:*` 允许存在；`icr:order:*` 登记为待清残留。
+   所以正确判据是：**`reservation:batch:*`、`lock:*`、以及所有已删域键空间 = 0**；`icr:reservation:*` 允许存在；`icr:order:*` 登记为待清残留（**2026-10-06 已清除，见上表**）。
+
+   **清理后实测（2026-10-06）**：`KEYS 'icr:*'` 只剩 **3 个**，全为 `icr:reservation:2026:10:04/05/06`（值 1012 / 1465 / 327，**与删前逐键一致**）；三个目标键 `TYPE` 全部返回 `none`。db10 的两个非本项目键**未动**（边界见下段）。
 
    **另一条不能混淆的边界**：同机 **db10** 有 2 个键（`shop:status`、`SHOP_STATUS`），**不属于本项目**（本应用用 db0），疑似本机其他项目——**不得**以"清理残留"为名去动它，终验结论只能声明"本项目所用 db0 的残留已清"，不得声称"Redis 整体干净"。
 
    **同时必须自证扫描器有效**：任何 `KEYS` 判据在采信 0 命中前，要先用一个已知存在的键证明模式能命中（本轮即以 `*reservation*` 命中 `icr:reservation:2026:10:06` 自证）。
 
-   **RabbitMQ 实测补充（本 Phase 复核，与 Phase 7 裁决一致，不翻案）**：vhost `/` 下共 4 个队列——本项目两个（`reservation.create.queue` / `reservation.create.dlq`，均 `messages=0 consumers=0` ✅），另有 `hello,queue1` / `hello,queue2`（durable，各 1 条消息，**名字里是逗号不是点**，已用管理接口位置参数自证：`hello.queue1` 返回 404、`hello,queue1` 返回 200）。这两个队列**已由 Phase 7 判定为"非本仓产生、与本项目无关、明确不动"**（见 `docs/refactor/PHASE7-DESIGN.md` 与本文件 §2 引用），Phase 10 **不删、不碰**，只在验收记录里注明"另有 2 个不属于本项目的既有开发队列"。另注：`consumers=0` 只有在应用**未运行**时才是有意义的判据——应用起来后本项目队列本应有消费者。
+   **RabbitMQ 实测补充（本 Phase 复核，与 Phase 7 裁决一致，不翻案）**：vhost `/` 下共 4 个队列——本项目两个（`reservation.create.queue` / `reservation.create.dlq`，均 `messages=0 consumers=0` ✅），另有 `hello,queue1` / `hello,queue2`（durable，各 1 条消息，**名字里是逗号不是点**，已用管理接口位置参数自证：`hello.queue1` 返回 404、`hello,queue1` 返回 200）。这两个队列**已由 Phase 7 判定为"非本仓产生、与本项目无关、明确不动"**（见 `docs/refactor/PHASE7-DESIGN.md` 与本文件 §2 引用），Phase 10 原定 **不删、不碰**，只在验收记录里注明"另有 2 个不属于本项目的既有开发队列"。
+
+   **→ 例外：2026-10-06 用户显式指示清理，已删（这是用户裁决覆盖 Phase 7 的范围决定，不是对 Phase 7 技术判断的翻案）**。执行记录：①**删前留档**：用管理接口 `POST /api/queues/%2F/<name>/get` + `ackmode=ack_requeue_true`（只读不消费）取出消息各 1 条，payload 均为 `'hwllo\r\new'`（教程手敲的 `hello new`，含错字），来源交换机 `amq.fanout`、`routing_key` 为空、`redelivered=false` —— 确认是课程时代的 fanout 演示消息，与本项目无关；②**删除**：`DELETE /api/queues/%2F/hello,queue1` 与 `.../hello,queue2`，均返回 **HTTP 204**；③**删后复核**：vhost `/` 只剩 2 个队列（`reservation.create.queue` / `.dlq`，均 `messages=0 consumers=0`），`amq.fanout` 上的绑定数 **0**，全 vhost 队列与交换机中含 `hello` 的条目数均为 **0**（无遗留自建交换机，本就没有——原绑定挂在 RabbitMQ 内建的 `amq.fanout` 上，队列一删绑定即随之消失）。
+
+   另注：`consumers=0` 只有在应用**未运行**时才是有意义的判据——应用起来后本项目队列本应有消费者。
 
    **`tb_user` 残留的定性（必须写进 README 已知边界）**：实测 1013 行 = **2 个 `LAB_ADMIN` + 1011 个 `USER`**，且**没有任何一行**命中测试夹具手机号前缀（`17%`/`22%`/`98%` 全为 0）——说明测试的 `@AfterEach` 清理是干净的，1011 行是**教程 dump 的遗留用户**（§3.2 已决定不搬其 INSERT 进迁移链，也不删用户现有数据）。所以终验对 `tb_user` 的判据只能是"**行数未变**"（1013），**不是**"0 行"；新装库由迁移链建库时不会有这些行。别把"用户表非空"误判成残留未清。
 9. **差别力实验（变体法）——T4 已执行，结果如下（方法：改坏 → 跑目标类 → byte-exact 复原 + SHA-256 核对；7 个生产文件的合并指纹改坏前后完全一致，无变体残留）**：
