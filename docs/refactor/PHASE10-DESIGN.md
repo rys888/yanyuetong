@@ -114,15 +114,20 @@
 
 ### 2.2 凭据盘点（实测）
 
-**工作区（HEAD，跟踪文件）**——3 处：
+**工作区（HEAD，跟踪文件）**——4 处，分布在 3 个文件：
 
-| 位置 | 形态 |
-|---|---|
-| `docs/refactor/PHASE0-BASELINE.md:226` | 把本机 MySQL/Redis 口令作为"问题清单第 9 条"的**证据**抄了进去 |
-| `docs/refactor/PHASE2-DESIGN.md:400` | 安全审计表 B4 行同上 |
-| `秒杀消息队列迁移RabbitMQ-交付报告.md:78`（另第 12 行叙述中也有） | 报告里贴了当时的 `application.yaml` 片段 |
+| 位置 | 形态 | 性质 |
+|---|---|---|
+| `docs/refactor/PHASE0-BASELINE.md:226` | 问题清单第 9 条的**证据**里抄了 `password: 123` 与 `password: 123321` | **课程时代**的演示口令，非本机当前口令 |
+| `docs/refactor/PHASE2-DESIGN.md:400` | 安全审计表 B4 行抄了 `password: 123` | 同上 |
+| `秒杀消息队列迁移RabbitMQ-交付报告.md:12` | 叙述句里直接写了**本机当前** MySQL/Redis 口令字面量 | **真凭据** |
+| `秒杀消息队列迁移RabbitMQ-交付报告.md:78` | 贴出的 `application.yaml` 片段里的 `password:` 赋值 | 配置片段里的口令字面量 |
 
-**配置本身已达标**：`application.yaml` 三处口令均为 `change_me` 占位；`spring.profiles.active: local`；真值在 `src/main/resources/application-local.yaml`，该文件 **未跟踪**且被 `.gitignore:37` 覆盖（`git check-ignore` 已验），仓库内只有 `.example` 模板。`RedissonConfig` 已改为 `@Value` 注入，无硬编码 IP/口令（Phase 2 已完成）。
+**更正初稿的两处措辞**：① 本机**当前**口令只出现在那份交付报告里（`:12`）；`PHASE0-BASELINE.md` / `PHASE2-DESIGN.md` 抄的是**课程原配置**的 `123`/`123321`，虽然同样该清，但性质是"历史审计证据里的旧值"而非"本机口令"。② `application.yaml` 里三个口令早已是 `change_me` 占位、`.example` 模板是 `your_password_here`——这两个是白名单，**不属于待清项**。
+
+**扫描方法的坑（必须写进任务包，否则终验会假通过）**：本仓库有 **3 个非 ASCII 文件名**（`实验资源预约平台-分阶段重构Phase计划.md`、`秒杀消息队列迁移RabbitMQ-交付报告.md`、`黑马点评 → 实验资源预约平台重构.md`），而 `git ls-files` 在默认 `core.quotepath=true` 下把它们输出成八进制转义形式（如 `"\347\247\222\346\235\200..."`），**驱动器直接拿这个列表去 grep，文件会打不开而被静默跳过**——实测 `git ls-files | grep -E '\.md$'` 驱动的扫描漏掉了那份交付报告（恰好是含真口令的那份）。所以扫描文件清单必须用 `find`、或 `git -c core.quotepath=false ls-files`，并且**扫描器必须先自证**（在一个已知存在的串上命中，例如 `spring:`）才允许采信它的 0 命中结论。
+
+**配置本身已达标**：`application.yaml` 三处口令均为 `change_me` 占位；`spring.profiles.active: local`；真值在 `src/main/resources/application-local.yaml`，该文件 **未跟踪**且被 `.gitignore` 覆盖（`git ls-files` 计数 = 0，已验），仓库内只有 `.example` 模板。`RedissonConfig` 已改为 `@Value` 注入，无硬编码 IP/口令（Phase 2 已完成）。
 
 **历史**：逐提交扫描（49 个提交全量）确认**每一个提交都含明文口令**——源头是原始课程提交（`63d6575 Initial commit` 起）里 `application.yaml` 就是明文，加上后来的三份文档。**用户裁决：不改写历史，登记为已知边界。**
 
@@ -413,7 +418,7 @@ LIMIT #{limit}
 2. **命名零残留**：`grep -rn 'com\.hmdp\|hm-dianping\|HmDianPing' src/ pom.xml` 计数 = 0；`grep -rn '"com\.hmdp' src/` = 0（字符串形式单独查）。
 3. **§10.1 关键词**：对 `shop/voucher/seckill/blog/follow/dianping/geo/sign/bitmap/hyperloglog` 在**黑马语义**下逐个判定（先给出"应该为 0 的判据"，再用已知为"有"的样本自证判据有效）。
 4. **禁改清单**：`reservation.lua`、`reservationRollback.lua`、`unlock.lua`、`ReservationLifecycleServiceImpl`、`ReservationPersistenceServiceImpl`、`ReservationQuotaRollbackExecutor`、`ReservationQuotaExecutor`、`ReservationRequestStatus`、`ReservationStatus`、`active_flag` DDL —— 用 `git status --porcelain -- <真实路径>` 核验（路径必须先 `find` 定位，不得凭记忆拼）。
-5. **凭据**：全仓库正则扫描（白名单 `change_me` / `your_password_here` / `${...}` / 占位符），命中数 = 0。
+5. **凭据**：全仓库正则扫描（白名单 `change_me` / `your_password_here` / `${...}` / 占位符），命中数 = 0。**扫描必须先自证**（在已知存在的串上命中，如 `package com.yanyuetong` / `spring:`），**文件清单必须用 `find` 或 `git -c core.quotepath=false ls-files`**——默认 `git ls-files` 会把 3 个中文文件名转义成八进制，导致含真口令的那份报告被静默跳过、给出假通过的 0（见 §2.2 实测）。
 6. **README 章节**：15 节逐节核对存在且非空。
 7. **数据库**：死表已 DROP（`information_schema` 复核）；在用 4 表 + 种子数据（`tb_equipment` 12 / `tb_laboratory` 4）未损；`tb_user` 行数未变。
 8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 无 `reservation*` / `lock:reservation*`；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
