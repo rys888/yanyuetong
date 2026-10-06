@@ -38,6 +38,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doThrow;
 
 @SpringBootTest(properties = {
         "spring.rabbitmq.listener.simple.auto-startup=false",
@@ -153,6 +155,37 @@ class ReservationFulfillmentReconcileTest {
     }
 
     @Test
+    void shouldMoveFailedQuotaReleaseBehindLaterReservations() {
+        int limit = 2;
+        LocalDateTime now = LocalDateTime.now();
+        ReservationBatch batch = createBatch(now.minusHours(1), now.plusHours(1),
+                ReservationBatchStatus.PUBLISHED, TOTAL_QUOTA);
+        Reservation failing = createReservation(userA.getId(), batch.getId(),
+                ReservationStatus.CANCELLED, false);
+        Reservation second = createReservation(userA.getId(), batch.getId(),
+                ReservationStatus.CANCELLED, false);
+        Reservation initiallyOutsideWindow = createReservation(userA.getId(), batch.getId(),
+                ReservationStatus.CANCELLED, false);
+        setUpdateTime(failing.getId(), now.minusMinutes(14));
+        setUpdateTime(second.getId(), now.minusMinutes(13));
+        setUpdateTime(initiallyOutsideWindow.getId(), now.minusMinutes(12));
+        doThrow(new IllegalStateException("持续回滚故障")).doCallRealMethod()
+                .when(rollbackExecutor).rollback(batch.getId(), userA.getId());
+
+        assertEquals(1, reconcileService.releasePendingQuotas(limit));
+
+        Reservation deferred = reservationMapper.selectById(failing.getId());
+        Reservation waiting = reservationMapper.selectById(initiallyOutsideWindow.getId());
+        assertTrue(deferred.getUpdateTime().isAfter(waiting.getUpdateTime()));
+        List<Reservation> nextWindow = reservationMapper.selectPendingQuotaReleases(limit);
+        assertEquals(initiallyOutsideWindow.getId(), nextWindow.get(0).getId());
+
+        reconcileService.releasePendingQuotas(limit);
+
+        assertTrue(reservationMapper.selectById(initiallyOutsideWindow.getId()).getQuotaReleased());
+    }
+
+    @Test
     void shouldMarkOnlyExpiredReservationsAsNoShowWithoutChangingQuota() {
         LocalDateTime now = LocalDateTime.now();
         ReservationBatch expired = createBatch(now.minusHours(3), now.minusHours(2),
@@ -248,6 +281,12 @@ class ReservationFulfillmentReconcileTest {
         assertEquals(1, reservationMapper.insert(reservation));
         reservationIds.add(reservation.getId());
         return reservation;
+    }
+
+    private void setUpdateTime(Long reservationId, LocalDateTime updateTime) {
+        assertEquals(1, reservationMapper.updateById(new Reservation()
+                .setId(reservationId)
+                .setUpdateTime(updateTime)));
     }
 
     private void occupy(Long batchId, Long userId, int quota) {

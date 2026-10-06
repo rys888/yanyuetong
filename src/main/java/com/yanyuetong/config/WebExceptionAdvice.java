@@ -6,6 +6,7 @@ import com.yanyuetong.exception.ForbiddenException;
 import com.yanyuetong.exception.ServiceUnavailableException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -36,8 +37,15 @@ public class WebExceptionAdvice {
     }
 
     @ExceptionHandler(RuntimeException.class)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Result handleRuntimeException(RuntimeException e) {
         log.error(e.toString(), e);
         return Result.fail("服务器异常");
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result handleHttpMessageNotReadable(HttpMessageNotReadableException e) {
+        return Result.fail("请求体格式错误");
     }
 }

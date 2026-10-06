@@ -63,9 +63,12 @@ public class ReservationRequestServiceImpl implements IReservationRequestService
 
     @Override
     public boolean recordFailReason(long requestId, String failReason) {
+        // 首次写入失败原因会触发 MySQL 的 ON UPDATE，但重复写入同一原因是 no-op，
+        // 不会自动推进 update_time；这里必须显式赋值，避免持续失败行重新钉在扫描窗口队首。
         return reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
                 .eq(ReservationRequest::getRequestId, requestId)
-                .set(ReservationRequest::getFailReason, failReason)) == 1;
+                .set(ReservationRequest::getFailReason, failReason)
+                .set(ReservationRequest::getUpdateTime, LocalDateTime.now())) == 1;
     }
 
     @Override
