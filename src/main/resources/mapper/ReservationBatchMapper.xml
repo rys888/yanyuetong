@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.hmdp.mapper.ReservationBatchMapper">
+<mapper namespace="com.yanyuetong.mapper.ReservationBatchMapper">
 
     <sql id="batchColumns">
         b.id, b.equipment_id, b.start_time, b.end_time,
@@ -10,7 +10,7 @@
         l.name AS laboratory_name
     </sql>
 
-    <select id="selectBatchDetailById" resultType="com.hmdp.vo.ReservationBatchVO">
+    <select id="selectBatchDetailById" resultType="com.yanyuetong.vo.ReservationBatchVO">
         SELECT <include refid="batchColumns"/>
         FROM tb_reservation_batch b
         LEFT JOIN tb_equipment e ON b.equipment_id = e.id
@@ -18,7 +18,7 @@
         WHERE b.id = #{id}
     </select>
 
-    <select id="selectReservationBatchPage" resultType="com.hmdp.vo.ReservationBatchVO">
+    <select id="selectReservationBatchPage" resultType="com.yanyuetong.vo.ReservationBatchVO">
         SELECT <include refid="batchColumns"/>
         FROM tb_reservation_batch b
         LEFT JOIN tb_equipment e ON b.equipment_id = e.id

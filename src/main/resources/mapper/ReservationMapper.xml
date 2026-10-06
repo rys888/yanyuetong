@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.hmdp.mapper.ReservationMapper">
+<mapper namespace="com.yanyuetong.mapper.ReservationMapper">
 
     <sql id="reservationColumns">
         r.id, r.user_id, r.batch_id, r.status, r.quota_released,
@@ -9,7 +9,7 @@
         b.start_time, b.end_time, b.booking_start_time, b.booking_end_time
     </sql>
 
-    <select id="selectReservationDetailById" resultType="com.hmdp.vo.ReservationVO">
+    <select id="selectReservationDetailById" resultType="com.yanyuetong.vo.ReservationVO">
         SELECT <include refid="reservationColumns"/>
         FROM tb_reservation r
         LEFT JOIN tb_reservation_batch b ON r.batch_id = b.id
@@ -18,7 +18,7 @@
         WHERE r.id = #{id}
     </select>
 
-    <select id="selectReservationPage" resultType="com.hmdp.vo.ReservationVO">
+    <select id="selectReservationPage" resultType="com.yanyuetong.vo.ReservationVO">
         SELECT <include refid="reservationColumns"/>
         FROM tb_reservation r
         LEFT JOIN tb_reservation_batch b ON r.batch_id = b.id
@@ -41,7 +41,7 @@
         ORDER BY r.id DESC
     </select>
 
-    <select id="selectPendingQuotaReleases" resultType="com.hmdp.entity.Reservation">
+    <select id="selectPendingQuotaReleases" resultType="com.yanyuetong.entity.Reservation">
         SELECT r.id, r.user_id, r.batch_id, r.status, r.quota_released,
                r.create_time, r.update_time
         FROM tb_reservation r
