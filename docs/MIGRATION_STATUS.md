@@ -680,6 +680,23 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 | T5 | 测试卫生（原计划 #26 分页依赖、#27 手机号碰撞） | `207ed41`（仅文档） | ⚠️ **两项前提均被实测证伪，零代码改动**（W1/W2/W3 阴性对照 + 独立机制演示程序） |
 | T6 | 4 份根目录文档归置入 `docs/`、全仓凭据脱敏、README 15 节、本台账收口 | `2855310` | ✅ 凭据两条探测器命中 0 |
 
+**Phase 10 全量回归（2026-10-06 补测，唯一一次全量）**：`mvn -B test`（JDK 8 Corretto `1.8.0_504`）→
+**161 run / 0 failures / 0 errors / 0 skipped**，BUILD SUCCESS，`Total time: 01:19 min`。
+16 个测试类全部执行（源码中 `*Test` 类 16 个、无未执行类；`target/surefire-reports/*.xml` 汇总与 stdout 一致 = 161/0/0/0）。
+
+**数字对账**：Phase 9 结束时全量 **154** → T1 删除 2 个无断言测试类（`HmDianPingApplicationTests`、`RedissonTest`）→ 152 → Phase 10 新增 9 例 → **161**，逐类计数与 surefire 一一对应。
+（对账时一度被"162 个 `@Test` 注解"绊住，差额那 1 个是 `EquipmentCacheTest` 里的 **`@TestConfiguration`** 被 `@Test` 前缀匹配到 —— 不是漏跑的用例，正则没加词边界而已。）
+
+**登记的台账缺口**：**Phase 10 此前从未记录过全量数字** —— T4 记的"54 例 0 失败"是受影响的 6 个类定向跑
+（`LaboratoryOwnershipTest` 18 + `ReservationReconcileTest` 10 + `BookingStateTest` 9 +
+`ReservationRequestStateTest` 8 + `ReservationFulfillmentReconcileTest` 5 + `EquipmentCacheTest` 4 = 54），不是全量。
+即"Phase 10 无回归"这句话在本次补测之前**没有全量证据支撑**；现已补上。
+
+**同一次实测顺带证实死表 DROP 与残留清理无副作用**（跑完后复核）：
+4 张预约表 0 行；8 张在用表与主数据行数不变（`tb_user` 1013 / `tb_laboratory` 4 / `tb_equipment_category` 6 / `tb_equipment` 12）；
+Redis 只剩 `icr:reservation:2026:10:04/05/06`，**被删的 3 个 `icr:order:*` 未再现** —— 全量测试确实会走 `RedisIdWorker`，
+这是"那 3 个键真的不可达"的**正面证据**（不是只靠读码推断）；broker 只剩本项目 2 个预约队列、各 0 条，`hello,*` 未再现。
+
 **T5 的结论必须按实测理解，不要按初稿读**：`#26`（分页用例隐含依赖"夹具落在第 1 页"）经 W3 阴性对照证明**本就确定**
 （`ORDER BY b.id DESC` + 被断言的两行恰好 id 最大 + `assertFalse` 由 WHERE 兜住）；`#27`（手机号夹具 10 ms 周期导致跨类撞号）
 经 W1 决定性反证（把两类后缀钉成同一常数后仍**全绿**）证明**当前不可达**。10 ms 周期这个数字本身为真，
@@ -920,6 +937,8 @@ Phase 10 Review — PASS — 2026-10-06，详见 `docs/refactor/PHASE10-DESIGN.m
 （T1–T6 逐项验收：命名零残留、黑马语义关键词**代码/配置范围恰 1 处白名单 + SQL 范围恰 9 处且全在 DROP 脚本**、
 凭据两条探测器命中 0、README 15 节齐备、
 禁改清单 porcelain 全空；判别力证据 V1–V12 + W1–W3 共 15 组变体实验，全部 byte-exact 复原。
+**全量回归（2026-10-06 补测）：161 run / 0 failures / 0 errors / 0 skipped，BUILD SUCCESS，`Total time: 01:19 min`** ——
+Phase 10 期间唯一一次全量（此前只有定向跑），数字对账与残留复核见上文「Phase 10 全量回归」。
 **注意**：此处原写"26 个黑马语义关键词 0 命中"，该结论**不可复现**，已按实测改写（见 `PHASE10-DESIGN.md` §3.1 订正五
 与上页「Phase 10 的五处自我订正」第 4 条）；判据现由 `scripts/verify-acceptance.sh` 钉住期望条数，一旦变化即报红。）
 **诚实登记的强度缺口**：`LOGIN_USER_TTL` 常量（V8 阴性对照证明无行为可测）、P2-22 分支二 CAS 拒绝
