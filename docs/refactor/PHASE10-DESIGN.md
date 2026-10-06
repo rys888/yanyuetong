@@ -217,7 +217,7 @@
 | 24 | P2-21 F4 `DELETE /laboratory/{id}` 不查依赖 → 孤儿批次 | MS #21 | §3.6 **修** |
 | 25 | P2-22 发布失败两分支复用同一句报错 | MS #22 | §3.11 修 |
 | 26 | P2-24 并发用例判别力概率性（3/18） | MS #24 | §3.12 登记 |
-| 27 | P2-27 夹具手机号碰撞概率 ~1e-5 | MS #27 | §3.10 加固 |
+| 27 | P2-27 夹具手机号碰撞概率 ~1e-5 | MS #27 | §3.10 加固（**修法与机制均已订正，见 §3.10**） |
 | 28 | P2-28 中断测试留夹具残留，收尾须查 DB | MS #28 | §3.13 验收清单 |
 | 29 | `tb_` 前缀是否去除 | P2-DESIGN:170 | §3.12 **保留** |
 
@@ -303,7 +303,11 @@
 
 因此选 VO 的真实理由是：① 与仓库既有三套 VO 的「公开/内部字段隔离」模式一致；② **默认不外泄**——新增实体字段时 VO 不会自动带上，而 `@JsonIgnore` 是逐字段黑名单，会随实体演进而失效。`@JsonIgnore` 同样可用且少一个类，代价是它同时阻断请求体反序列化（`saveLaboratory` 会以当前登录者覆盖、`updateLaboratory` 会置 null，阻断无害）。二者都可接受，取 VO 以保持一致性并让"不外泄"成为默认。
 
-**不破坏既有断言（已核实）**：`LaboratoryOwnershipTest:222/223/237/238` 断言的是 `laboratoryService.getById(...)` 的**读库结果**，不是 HTTP 响应体，故改 VO 不会使它们变红——因此 F3 不提供"变红"型差别力证据，其验证只能到"响应体确实不含该字段"这一步，按 §3.13 第 11 条诚实登记。
+**不破坏既有断言（已核实）**：`LaboratoryOwnershipTest:222/223/237/238` 断言的是 `laboratoryService.getById(...)` 的**读库结果**，不是 HTTP 响应体，故改 VO 不会使它们变红。
+
+**判别力证据（T4 实测，已推翻本文档初稿的"F3 无变红证据"结论）**：T4 新增了 `shouldNotExposeAdminUserIdFromLaboratoryReadEndpoints`，变体实验 V2 实测——把 `adminUserId` 加回 `LaboratoryVO` 后，该用例立刻变红（17 例中恰好且仅此 1 例）。所以 F3 **有**变红型证据，初稿的登记已作废。
+
+**该用例残留的判据缺口（Review 发现，已列入返工 R3）**：它只断言 JSON 里**不含** `adminUserId`，却不断言**其余字段还在**——一个把所有字段都丢掉的 `LaboratoryVO` 同样能通过，故它对"VO 映射是否完整"零判别力。返工要求补上"`name`/`campus`/`status` 与实体一致、`createTime` 非空"的断言，同时保留"实体序列化确实含 `adminUserId`"这条判据自证。
 
 **登记**：这是接口面变更（响应体少一个字段），写入 README。
 
@@ -317,7 +321,9 @@
 - 新增 `handleHttpMessageNotReadable` → `@ResponseStatus(HttpStatus.BAD_REQUEST)`，返回"请求体格式错误"；
 - `BadRequestException` / `ForbiddenException` / `ServiceUnavailableException` 三个既有处理器**不动**（已各有正确状态）。
 
-**风险**：既有测试可能断言了 200。**验收**：全量测试跑一遍，逐条判定任何变红的用例是"断言了错误契约"还是"真实回归"——若是前者，按 F-9C 的教训**优先怀疑是契约被写错了**，并与 Phase 6 的设计措辞（已更正为"应区分 400/500"）对齐。
+**风险**：既有测试可能断言了 200。**验收实测（T4）**：全量 52 例 0 失败 0 错误，没有任何用例因 500 而变红（`BadRequestException`/`ForbiddenException`/`ServiceUnavailableException` 三类各有自己的处理器，不受影响）。
+
+**判别力缺口（T4 Review 实测发现，已列入返工 R1）**：变体实验 V4 把 `handleRuntimeException` 上的 `@ResponseStatus(INTERNAL_SERVER_ERROR)` **整个删掉**，`LaboratoryOwnershipTest` 17 例**全绿** ⇒ 本修复的**主体（500）零覆盖**。T4 交付的 `shouldMapUnreadableRequestBodyToBadRequest` 用注解反射，只能证明"注解写着"，证明不了"Spring 真的返回 400"（变体 V3 虽能命中该用例，但它是**结构级**判据：类丢掉 `@RestControllerAdvice`、方法被更具体的处理器遮蔽、或方法变 `private` 时都不会红）。返工要求改用 **standalone MockMvc**（`standaloneSetup(探针控制器).setControllerAdvice(new WebExceptionAdvice())`）写**行为级**用例：非法 JSON 请求体 → HTTP 400；抛出未预期异常 → HTTP 500 + `"服务器异常"`。standalone 走同一个 `ExceptionHandlerExceptionResolver`，会真正解析 `@ResponseStatus`，且不经鉴权拦截器。
 
 ### 3.9 [决策] P1 修复 F-C：`listStale` 饥饿（本 Phase 最巧的一处）
 
@@ -360,6 +366,14 @@ LIMIT #{limit}
 
 **新增测试**：构造 `n+1` 条陈旧行，其中**第 1 条（最旧）的补偿必然失败**（`@SpyBean` 让 `rollback` 对该 batchId 抛异常），断言 ①本轮 `failed=1` 且 ②该行 `fail_reason` 已写入 ③**下一轮 `listStale` 不再选中它**（即它已不在最前），而第 n+1 条能被处理到。第二处（`releasePendingQuotas`）**同样要一条判别力用例**：让最旧的 CANCELLED 行 rollback 抛异常，断言它的 `update_time` 被推进、下一轮 `selectPendingQuotaReleases` 不再把它放在窗口首位。两处的夹具都必须**显式写入各自不同的 `update_time`**（不要靠插入时刻的自然先后——`timestamp` 只有秒精度，同一秒内插入的多行会并列，排序退化为按 id），否则用例本身不确定。
 
+**订正记录（T4 实测推翻本文档此前对这个用例的判断，勿再沿用）**：上文我曾写"新增用例即 F-C 站点 1 的判别力证据"。**这是错的。** 变体实验 V5 实测：把 `recordFailReason` 里的 `.set(ReservationRequest::getUpdateTime, LocalDateTime.now())` **整个删掉**（即回到未修复的写法），`ReservationReconcileTest` **9 例全绿**，包括两条新增用例。也就是说这两条用例对"显式 SET"**零判别力**。
+
+**机制（这条比结论重要）**：站点 1 与前文那张探针表的前提**不完全一样**。`fail_reason` 从 `NULL` 写成 `RECONCILE_ATTEMPT_FAILED` **本身就是一次真实的列值变更**，所以 `ON UPDATE CURRENT_TIMESTAMP` 会照常触发——**第一次**失败时显式 SET 确实是冗余的，用例因此照样绿。显式 SET 只在**同一个失败原因被重复写入（同值写）**时才承重，而那正是前文"修复只在第一轮有效"所描述的饥饿复发场景。**所以修复本身是对的，错的是"用例已经覆盖它"这个判断——用例只覆盖了第一轮。**
+
+**返工要求（R2）**：补一条确定性用例覆盖**同一失败原因的第二次失败**——先失败一次（此时 `fail_reason` 已是 `RECONCILE_ATTEMPT_FAILED`、`update_time` 被推到当前）→ 用既有 `makeStale(requestId)` 把 `update_time` 人工拨回陈旧 → 再失败一次（原因不变）→ 断言 `update_time` 仍被推到陈旧值之后。该用例必须在去掉显式 SET 后变红。
+
+**站点 2 的判别力已实测成立，且顺带复验了本文档的前提**：变体实验 V6 把 `deferPendingQuotaReleaseSafely` 的 `LocalDateTime.now()` 换成 `reservation.getUpdateTime()`（即"写回它自己的原值"），`ReservationFulfillmentReconcileTest` 中 `shouldMoveFailedQuotaReleaseBehindLaterReservations` 立刻变红（5 例中恰好且仅此 1 例）。值得注意的是，这个变体**同时是一次在真实 `tb_reservation` 表上的前提复验**——写同值不推进 `update_time`，与上文 `hmdp_p10_ts` 临时库的探针结论一致。即该前提现在有"临时库探针 + 真表变体"两重实测支撑。
+
 **诚实登记（副作用）**：`tb_reservation.update_time` 同时被 `ReservationVO` 作为 `updateTime` 返回给前端（`ReservationVO:42`），所以"补偿失败"会让该预约的"最后更新时间"看起来被刷新了一次。已确认**没有任何测试**断言该语义（`grep update_time src/test/` 仅命中两行注释），影响仅为可观测性上的轻微失真，登记于 README 已知边界。
 
 ### 3.10 [决策] 测试卫生
@@ -368,8 +382,16 @@ LIMIT #{limit}
 |---|---|
 | `RedissonTest`、`HmDianPingApplicationTests` | 删（无断言） |
 | #22 P2-17：`EquipmentCacheTest` 靠语句 id 匹配 MyBatis 语句 | **无需改动——判据自证已经存在**。T2 的判别力实验实测：把 `:235` 的语句 id 改回 `com.hmdp.mapper.EquipmentMapper.selectById` 后，`shouldUseCacheAfterFirstDatabaseQueryAndCacheMissingEquipment:146` 立刻变红（`expected: <1> but was: <0>`）。该断言（`:146/:150/:154` 对 `equipmentSelectCounter.getCount()` 的断言）**本身就是**"拦截器实际命中次数 > 0"的判据自证：id 一失配计数恒为 0，测试就不可能还绿。故初稿列为待办是**误判**，已撤销 |
-| #17 P2-26：`ReservationBatchLifecycleTest.shouldIncludePublishedAndClosedBatchesOnPublicPage` 依赖"夹具在第 1 页" | 加固：像 Phase 6 的分页用例那样用 `equipmentId` 收窄查询，消除对库中累积数据的依赖 |
-| #27 P2-27：夹具手机号碰撞概率 | 加固：把随机空间从 `% 10_000_000L` 提到与 Phase 5 一致的 `% 100_000_000L`，并保持唯一性 |
+| #17 P2-26：`ReservationBatchLifecycleTest` 的公开分页用例依赖"夹具落在第 1 页" | 加固：像 Phase 6 的分页用例那样用 `equipmentId` 收窄查询，消除对库中累积数据的依赖。**方法名订正（实测）**：本文档此前写作 `shouldIncludePublishedAndClosedBatchesOnPublicPage`，该名字在文件中**不存在**；真实方法名是 `shouldOnlyReturnPublishedAndClosedBatchesOnPublicPage`（`ReservationBatchLifecycleTest:416`）。派发 T5 时必须用订正后的名字 |
+| #27 P2-27：夹具手机号碰撞概率 | 加固。**本文档此前给的修法（"提到 `% 100_000_000L`"）落不了地，必须订正**——见下方两条实测 |
+
+**#27 订正一：文档原修法会直接把测试改崩（实测）。** 三处 `%07d` 夹具的手机号拼法是 `String.format("17%s%02d", phoneSuffix, sequence)`（`ReservationPublishFailureTest:334`、`ReservationMqTest:800`、`ReservationSubmitTest:523`），即 **2 + 7 + 2 = 11 位**；而 `tb_user.phone` 是 `varchar(11) NOT NULL`，本机 `sql_mode` 含 `STRICT_TRANS_TABLES`。实测（临时库 `hmdp_p10_len`，建 `varchar(11)` 表后写入，用完即 DROP，已核对 `SCHEMATA` 无残留）：11 字符写入成功；**12 字符报 `ERROR 1406 (22001) Data too long for column 'phone'`**。所以保留 `"17"` 前缀、只把 `%07d` 加宽到 `%08d`，会让这三个类的 `@BeforeEach` 每次直接抛错——**不是加固，是把测试全部改红**。任何修法都必须守住 **11 位**这个不变量。
+
+**#27 订正二：真正的问题不是"碰撞空间"而是"取模周期"（机制分析）。** `System.nanoTime()` 的纳秒值**低位在跑**，`% 10_000_000L` 取的是低 7 位十进制数，等价于一个**周期仅 10 ms** 的计数器——两个测试类的 `@BeforeEach` 只要相隔约 10 ms 的整数倍，手机号后缀就完全相同。这不是生日悖论式的"10^7 里抽两个"（那个概率确实约 1e-5，即 §2.5 台账里的原始估计），而是**周期性复现**。照此，`% 100_000_000L` 只是把周期从 10 ms 挪到 100 ms，属于缓解而非修复，且如上一条所述还落不了地。**正确修法**：保持 `%07d` 宽度与 `"17"` 前缀不变（守住 11 位），把时间源换成取模周期长于任何一次测试运行的形式，例如 `System.currentTimeMillis() % 10_000_000L`（周期 10^7 ms ≈ 2.78 小时）。
+
+**#27 的严重性定性（必须如实写入，不夸大）**：`tb_user.phone` 上有唯一索引 `uniqe_key_phone`（实测 `information_schema.STATISTICS`，`NON_UNIQUE=0`），所以碰撞的后果是**插入报错、用例变红**（响亮失败），**不是**数据串扰式的静默错误。`tb_laboratory.name` 虽无唯一索引，但实验室名重复不影响用例（测试都按 id 取实体）。因此本项是**偶发 flaky 源**，不是静默正确性缺陷。
+
+**#27 的边界（有意不扩大范围）**：另有一批夹具用 `System.nanoTime() % 100_000_000L`（周期 100 ms），是同一缺陷的较弱形式，分布在 10 个测试类中。T5 **不动它们**——理由是范围纪律，以及其中 `ReservationFulfillmentReconcileTest` / `ReservationReconcileTest` 刚被 T4 改过、再动会与 T4 的提交边界纠缠。这是**有意的取舍**，不得记成"已修好"。
 | #12 P2-12：`CacheClientMutexTest` T1 夹具复杂度 | **保留**。它 50 线程确定性构造了"并发未命中只回源一次"，是 Phase 4 P1-8 修复的**判别力证据本身**；简化会削弱证据强度。登记理由 |
 | #26 P2-24：并发用例判别力 3/18 概率性 | 保留并登记（正确实现下恒绿，判别力是概率性的固有局限） |
 
@@ -450,7 +472,23 @@ LIMIT #{limit}
    **RabbitMQ 实测补充（本 Phase 复核，与 Phase 7 裁决一致，不翻案）**：vhost `/` 下共 4 个队列——本项目两个（`reservation.create.queue` / `reservation.create.dlq`，均 `messages=0 consumers=0` ✅），另有 `hello,queue1` / `hello,queue2`（durable，各 1 条消息，**名字里是逗号不是点**，已用管理接口位置参数自证：`hello.queue1` 返回 404、`hello,queue1` 返回 200）。这两个队列**已由 Phase 7 判定为"非本仓产生、与本项目无关、明确不动"**（见 `docs/refactor/PHASE7-DESIGN.md` 与本文件 §2 引用），Phase 10 **不删、不碰**，只在验收记录里注明"另有 2 个不属于本项目的既有开发队列"。另注：`consumers=0` 只有在应用**未运行**时才是有意义的判据——应用起来后本项目队列本应有消费者。
 
    **`tb_user` 残留的定性（必须写进 README 已知边界）**：实测 1013 行 = **2 个 `LAB_ADMIN` + 1011 个 `USER`**，且**没有任何一行**命中测试夹具手机号前缀（`17%`/`22%`/`98%` 全为 0）——说明测试的 `@AfterEach` 清理是干净的，1011 行是**教程 dump 的遗留用户**（§3.2 已决定不搬其 INSERT 进迁移链，也不删用户现有数据）。所以终验对 `tb_user` 的判据只能是"**行数未变**"（1013），**不是**"0 行"；新装库由迁移链建库时不会有这些行。别把"用户表非空"误判成残留未清。
-9. **差别力实验（变体法）**：对本轮**新增/修改的行为**逐个做"改坏 → 目标用例变红 → byte-exact 复原 + SHA-256 核对"。可做变体实验的：F4 依赖检查、F3 VO 不外泄（只能验到"响应体字段"这一层，见 §3.7）、F-C 两处退避、P2-25 状态码、P2-22 分支一文案。**已确认无法做变体实验**（因而只能人工核对并登记）：`LOGIN_USER_TTL`（全仓无 TTL 断言）、F3 的"既有用例变红"（`LaboratoryOwnershipTest` 断言的是读库结果）、P2-22 分支二（若无法确定性构造）。
+9. **差别力实验（变体法）——T4 已执行，结果如下（方法：改坏 → 跑目标类 → byte-exact 复原 + SHA-256 核对；7 个生产文件的合并指纹改坏前后完全一致，无变体残留）**：
+
+   | 变体 | 改坏什么 | 实测结果 | 判别力 |
+   |---|---|---|---|
+   | V1 | F4 判据 → `if (false)` | 17 例中恰好 1 例红：`shouldRejectDeletingOwnedLaboratoryWithEquipmentDependency` | ✅ |
+   | V9 | 同一判据 → `if (true)`（反方向） | 恰好 1 例红：`shouldDeleteOwnedLaboratoryWithoutEquipmentDependency` | ✅（双向） |
+   | V2 | `LaboratoryVO` 加回 `adminUserId` | 恰好 1 例红：`shouldNotExposeAdminUserIdFromLaboratoryReadEndpoints` | ✅ |
+   | V3 | 移除 `handleHttpMessageNotReadable` 的 400 注解 | 恰好 1 例红：`shouldMapUnreadableRequestBodyToBadRequest` | ⚠️ 结构级（注解反射），非行为级 |
+   | **V4** | **移除 `handleRuntimeException` 的 500 注解** | **17 例全绿** | ❌ **零覆盖**（P2-25 主体） |
+   | **V5** | **`recordFailReason` 去掉显式 `SET update_time`** | **`ReservationReconcileTest` 9 例全绿** | ❌ **零判别力**（F-C 站点 1） |
+   | V6 | `deferPendingQuotaReleaseSafely` 写回原值 | 恰好 1 例红：`shouldMoveFailedQuotaReleaseBehindLaterReservations` | ✅（F-C 站点 2，并复验前提） |
+   | V7 | P2-22 分支一文案改回旧值 | 恰好 1 例红：`shouldExplainWhenPublishQuotaMarkerAlreadyExists` | ✅ |
+   | V8 | `LOGIN_USER_TTL` → `36000L` | 17 例全绿（阴性对照，常量无语义可测） | 按本质登记 |
+
+   **V4 / V5 是阴性对照**：故意破坏修复而测试仍全绿，即覆盖缺口的**实证**而非推断。二者已列为返工 R1 / R2（§3.8、§3.9）。
+
+   **诚实登记（无变体强度证据者，不得冒充已验证）**：`LOGIN_USER_TTL`（常量，V8 阴性对照证明无行为可测）；P2-22 分支二（CAS 拒绝，无可确定性构造的"读取后 UPDATE 前"注入点——由 Codex 明确登记，不伪造）；F4 的 `@Transactional`（无行为差异，见返工 R4）。
 10. **P0/P1/P2 审计表**：§10.7 三档逐条给结论与证据；P0 必须为零。
 11. **诚实登记**：凡无变体强度证据的改动（纯文案/日志/常量类）在 Review 中显式标注"无判别力证据"，不冒充已验证。
 
@@ -494,10 +532,14 @@ LIMIT #{limit}
 - **Acceptance**：新增/修改的每项都有对应测试；全量测试通过；对 F4/F3/F-C/状态码四项给出"改坏后哪些用例变红"的自测记录（供 Claude 做变体实验时比对）。
 - **Validation**：`mvn clean test`；逐项列出测试名。
 - **注意（写进任务包）**：若既有用例因 P2-25 状态码变更而变红，**先假定是既有断言写错了契约**（Phase 6 设计已更正为"应区分 400/500"），不要顺手把断言改成迁就实现；任何对**既有**测试的修改必须在汇报中单独列出并说明理由。
+- **执行结果（T4 实测）**：生产侧 7 项全部落地且经 Review 确认无误——`assertManageable` 顺序正确、注入的是 `EquipmentMapper`（无循环依赖）、两处 catch 内动作都被独立 try-catch 包住、`LOGIN_USER_TTL = 30L`、五处处理器齐备、P2-22 两句文案与 §3.11 钉的原文逐字一致、无混合行尾（`WebExceptionAdvice`/`RedisConstants` 仍为纯 CRLF）。**既有用例改写后旧名已不存在**：`shouldLeaveRequestNonTerminalWhenRollbackThrows` → `shouldBackOffFailedRequestAndRecoverAfterThreshold`，并新增 `shouldMoveFailedRequestOutOfStaleWindowSoLaterRequestCanProgress`。本地全量 4 类 **52 例 0 失败 0 错误**。
+- **返工（R1–R4，起因是 §3.13 第 9 条的 V4/V5 两项阴性对照）**：R1 用 standalone MockMvc 补 P2-25 的**行为级** 400/500 用例；R2 补 F-C 站点 1 的"同一失败原因第二次失败"用例；R3 补 F3 用例的"其余字段仍在"断言；R4 要求说明或收回 `deleteLaboratory` 上的 `@Transactional`（`SELECT COUNT(*)` 是一致性读，不关闭 check-then-act 的 TOCTOU 窗口，却暗示原子性）。
 
-### T5 — 测试卫生（与 T4 并行）
+### T5 — 测试卫生（**必须串行在 T4 之后**，理由见下）
 
 - **What**：§3.10 的 #17 P2-26（分页用例收窄）、#27 P2-27（手机号随机空间）。**#22 已撤销**（实测其判据自证已存在，见 §3.10 表内说明），本任务不再包含它。
+- **派发时必须用的订正事实（实测，勿沿用旧写法）**：① #17 的真实方法名是 `ReservationBatchLifecycleTest.shouldOnlyReturnPublishedAndClosedBatchesOnPublicPage`（文档旧写作 `shouldInclude...`，该名字不存在）；② #27 **不能**用"把 `%07d` 加宽到 `%08d`"来修——手机号是 `"17" + 7位 + 2位` = 11 位，而 `tb_user.phone` 是 `varchar(11)` 且 `sql_mode` 含 `STRICT_TRANS_TABLES`，12 位会报 `ERROR 1406 Data too long`（临时库实测）把三个测试类全部改崩；③ #27 的真实机制是 `nanoTime() % 10^7` 的**周期只有 10 ms**（取的是纳秒低位），不是"10^7 空间里撞两次"，故修法是**换时间源**（保持 11 位不变），不是加宽位数；④ 碰撞后果是唯一索引 `uniqe_key_phone` 报错变红（响亮），不是静默串扰，不得夸大成正确性缺陷；⑤ 另有一批 `nanoTime() % 100_000_000L`（周期 100 ms）是同一缺陷的较弱形式，**有意不在 T5 范围内**，不得记成"已修好"。
+- **顺序约束（订正：T5 不能与 T4 并行）**：T4 的返工与 T5 都改同一批测试类（`ReservationBatchLifecycleTest` 等），且在同一个工作目录里落盘，并行会互相覆盖。**T5 必须在 T4 完成并提交之后串行执行。** 本文档初稿写的"与 T4 并行"作废。
 - **Constraints**：只加固判据与夹具，**不得**削弱任何断言；不改动被加固用例的**业务断言本身**。
 - **Acceptance**：#17/#27 加固后全量测试通过；并给出"加固前后该用例的通过状态"对照，证明加固没有把用例改废。
 - **Validation**：`mvn clean test`。
