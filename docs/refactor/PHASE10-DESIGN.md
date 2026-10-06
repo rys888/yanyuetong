@@ -421,7 +421,27 @@ LIMIT #{limit}
 5. **凭据**：全仓库正则扫描（白名单 `change_me` / `your_password_here` / `${...}` / 占位符），命中数 = 0。**扫描必须先自证**（在已知存在的串上命中，如 `package com.yanyuetong` / `spring:`），**文件清单必须用 `find` 或 `git -c core.quotepath=false ls-files`**——默认 `git ls-files` 会把 3 个中文文件名转义成八进制，导致含真口令的那份报告被静默跳过、给出假通过的 0（见 §2.2 实测）。
 6. **README 章节**：15 节逐节核对存在且非空。
 7. **数据库**：死表已 DROP（`information_schema` 复核）；在用 4 表 + 种子数据（`tb_equipment` 12 / `tb_laboratory` 4）未损；`tb_user` 行数未变。
-8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 无 `reservation*` / `lock:reservation*`；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
+8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 残留键 = 0；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
+
+   **Redis 判据必须改正（实测：原判据是错的，会假通过）**：原写"Redis 无 `reservation*` / `lock:reservation*`"，但 `KEYS` 的模式是**前缀锚定**的——`KEYS 'reservation*'` 匹配不到 `icr:reservation:2026:10:06` 这类以 `icr:` 开头的键，会给出"干净"的假象。实测 db0（本应用，未配置 `database:` ⇒ 默认 db0）的真实状态：
+
+   | 模式 | 命中 | 判定 |
+   |---|---|---|
+   | `reservation:batch:quota:*` / `reservation:batch:users:*` | 0 | ✅ 这正是"名额泄漏"要查的目标，为空即通过 |
+   | `lock:*` | 0 | ✅ |
+   | `icr:reservation:*` | 3 | ✅ **预期存在**（`RedisIdWorker` 的按日计数，`ReservationServiceImpl:108` 在用）——**不是**残留，不得当残留删 |
+   | `icr:order:*` | 3 | ⚠️ **残留**：`nextId("order")` 的调用点已随秒杀/订单域删除。全仓 `nextId` 只有 3 处出现：`RedisIdWorker:27` 的声明、生产调用 `ReservationServiceImpl:108`、以及测试桩 `ReservationPublishFailureTest:256`——**后两处的前缀都是 `"reservation"`**，`"order"` 已无处可产生。这 3 个键无 TTL、不会再生 |
+   | `sign:*` / `*shop*` / `*blog*` / `*follow*` / `*voucher*` / `*user*` | 0 / 0 / 0 / 0 / 0 / 0 | ✅ 已删域的键空间全空 |
+
+   所以正确判据是：**`reservation:batch:*`、`lock:*`、以及所有已删域键空间 = 0**；`icr:reservation:*` 允许存在；`icr:order:*` 登记为待清残留。
+
+   **另一条不能混淆的边界**：同机 **db10** 有 2 个键（`shop:status`、`SHOP_STATUS`），**不属于本项目**（本应用用 db0），疑似本机其他项目——**不得**以"清理残留"为名去动它，终验结论只能声明"本项目所用 db0 的残留已清"，不得声称"Redis 整体干净"。
+
+   **同时必须自证扫描器有效**：任何 `KEYS` 判据在采信 0 命中前，要先用一个已知存在的键证明模式能命中（本轮即以 `*reservation*` 命中 `icr:reservation:2026:10:06` 自证）。
+
+   **RabbitMQ 实测补充（本 Phase 复核，与 Phase 7 裁决一致，不翻案）**：vhost `/` 下共 4 个队列——本项目两个（`reservation.create.queue` / `reservation.create.dlq`，均 `messages=0 consumers=0` ✅），另有 `hello,queue1` / `hello,queue2`（durable，各 1 条消息，**名字里是逗号不是点**，已用管理接口位置参数自证：`hello.queue1` 返回 404、`hello,queue1` 返回 200）。这两个队列**已由 Phase 7 判定为"非本仓产生、与本项目无关、明确不动"**（见 `docs/refactor/PHASE7-DESIGN.md` 与本文件 §2 引用），Phase 10 **不删、不碰**，只在验收记录里注明"另有 2 个不属于本项目的既有开发队列"。另注：`consumers=0` 只有在应用**未运行**时才是有意义的判据——应用起来后本项目队列本应有消费者。
+
+   **`tb_user` 残留的定性（必须写进 README 已知边界）**：实测 1013 行 = **2 个 `LAB_ADMIN` + 1011 个 `USER`**，且**没有任何一行**命中测试夹具手机号前缀（`17%`/`22%`/`98%` 全为 0）——说明测试的 `@AfterEach` 清理是干净的，1011 行是**教程 dump 的遗留用户**（§3.2 已决定不搬其 INSERT 进迁移链，也不删用户现有数据）。所以终验对 `tb_user` 的判据只能是"**行数未变**"（1013），**不是**"0 行"；新装库由迁移链建库时不会有这些行。别把"用户表非空"误判成残留未清。
 9. **差别力实验（变体法）**：对本轮**新增/修改的行为**逐个做"改坏 → 目标用例变红 → byte-exact 复原 + SHA-256 核对"。可做变体实验的：F4 依赖检查、F3 VO 不外泄（只能验到"响应体字段"这一层，见 §3.7）、F-C 两处退避、P2-25 状态码、P2-22 分支一文案。**已确认无法做变体实验**（因而只能人工核对并登记）：`LOGIN_USER_TTL`（全仓无 TTL 断言）、F3 的"既有用例变红"（`LaboratoryOwnershipTest` 断言的是读库结果）、P2-22 分支二（若无法确定性构造）。
 10. **P0/P1/P2 审计表**：§10.7 三档逐条给结论与证据；P0 必须为零。
 11. **诚实登记**：凡无变体强度证据的改动（纯文案/日志/常量类）在 Review 中显式标注"无判别力证据"，不冒充已验证。
