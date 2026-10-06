@@ -21,7 +21,6 @@ public class MvcConfig implements WebMvcConfigurer {
         // 登录拦截器
         registry.addInterceptor(new LoginInterceptor())
                 .excludePathPatterns(
-                        "/upload/**",
                         "/user/code",
                         "/user/login"
                 ).order(1);
