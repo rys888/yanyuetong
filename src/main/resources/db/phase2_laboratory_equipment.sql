@@ -48,7 +48,8 @@ INSERT INTO `tb_laboratory` (`id`, `name`, `campus`, `building`, `room`, `descri
   (1, '材料科学实验中心', '主校区', '材料楼', 'A101', '承担材料微观结构与性能分析实验。', 'OPEN'),
   (2, '分析测试实验室', '主校区', '理科楼', 'B205', '提供色谱、质谱与光谱分析服务。', 'OPEN'),
   (3, '先进制造实验室', '东校区', '工程训练中心', 'C108', '面向增材制造与精密加工教学科研。', 'OPEN'),
-  (4, '计算与样品制备中心', '东校区', '信息楼', 'D302', '提供高性能计算与通用样品制备条件。', 'MAINTENANCE');
+  (4, '计算与样品制备中心', '东校区', '信息楼', 'D302', '提供高性能计算与通用样品制备条件。', 'MAINTENANCE')
+ON DUPLICATE KEY UPDATE `id` = VALUES(`id`);
 
 INSERT INTO `tb_equipment_category` (`id`, `name`, `icon`, `sort`) VALUES
   (1, '显微成像', NULL, 1),
@@ -56,7 +57,8 @@ INSERT INTO `tb_equipment_category` (`id`, `name`, `icon`, `sort`) VALUES
   (3, '机械加工', NULL, 3),
   (4, '计算资源', NULL, 4),
   (5, '光谱分析', NULL, 5),
-  (6, '样品制备', NULL, 6);
+  (6, '样品制备', NULL, 6)
+ON DUPLICATE KEY UPDATE `id` = VALUES(`id`);
 
 INSERT INTO `tb_equipment` (`id`, `laboratory_id`, `category_id`, `name`, `description`, `location`, `image`, `usage_requirement`, `status`, `booking_enabled`) VALUES
   (1, 1, 1, '扫描电子显微镜', '用于材料表面微观形貌观察。', 'A101-1', NULL, '需完成显微镜操作培训。', 'AVAILABLE', 1),
@@ -70,4 +72,5 @@ INSERT INTO `tb_equipment` (`id`, `laboratory_id`, `category_id`, `name`, `descr
   (9, 1, 5, 'X 射线衍射仪', '用于材料物相与晶体结构分析。', 'A101-3', NULL, '粉末样品需密封包装。', 'AVAILABLE', 1),
   (10, 2, 5, '紫外可见分光光度计', '用于溶液吸收光谱测量。', 'B205-3', NULL, '使用前检查比色皿洁净度。', 'AVAILABLE', 1),
   (11, 4, 6, '冷冻切片机', '用于低温条件下组织切片。', 'D302-3', NULL, '需佩戴低温防护用品。', 'MAINTENANCE', 1),
-  (12, 4, 6, '超速离心机', '用于生物样品高速分离。', 'D302-4', NULL, '转子必须完成动平衡检查。', 'AVAILABLE', 1);
+  (12, 4, 6, '超速离心机', '用于生物样品高速分离。', 'D302-4', NULL, '转子必须完成动平衡检查。', 'AVAILABLE', 1)
+ON DUPLICATE KEY UPDATE `id` = VALUES(`id`);
