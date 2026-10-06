@@ -412,6 +412,8 @@ curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $
 - **不使用微服务 / 注册中心 / 分库分表 / ES / Kafka / 分布式事务框架**。当前业务量级下它们是纯负债；单库 + 两个中间件已足够，且可验证。
 - **库名保留 `hmdp`**、**表前缀保留 `tb_`**：改名收益是"观感"，成本是全量 DDL 与 SQL 的机械 churn，并破坏历史脚本可追溯性。
 - **设备名称搜索用 `LIKE '%name%'`**，不走索引。当前设备量级（十几行）下，搜索语义正确优先于索引。
+- **`CacheClient` 保留了两个没有调用方的查询实现**（`queryWithPassThrough` / `queryWithLogicalExpire`）。设备详情只走 `queryWithMutex`；这两个方法分别对应「缓存穿透」与「逻辑过期」两种范式，保留作参照，类注释已注明 `queryWithLogicalExpire` 为「未启用的备选实现」。这是全仓唯一一处有意保留的无调用方生产代码。
+- **缓存删除不做补偿**：`EquipmentServiceImpl.deleteEquipmentCache` 直接调 `stringRedisTemplate.delete`，既无 try/catch 也无重试——Redis 不可用时异常会直接抛出，表现是「库里的写已经生效、接口却报错」，缓存里的旧值要等 30 分钟 TTL 才过期。另外 `queryWithMutex` 抢锁重试 20 次仍失败时会直查数据库且**不回写缓存**，此时该热键的并发会全部压到 DB。两者都登记为已知边界：为它们引入补偿链路，代价大于收益。
 
 **行为与契约**
 
@@ -424,6 +426,7 @@ curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $
 - **`tb_user` 里有 1011 行课程时代遗留用户**（外加 2 个 `LAB_ADMIN`）。这些行不会被自动清理；新装库由迁移链建库时不会有它们。终验对用户表的判据是"行数未变"，不是"0 行"。
 - **`phase10_drop_legacy_tables.sql` 是一次性脚本**：仅从课程项目升级的旧库需要执行，且**不可逆**（会删除 `tb_shop` 14 行 / `tb_blog` 4 行 / `tb_voucher` 1 行等课程演示数据）。新装库不需要它。它同时也是全仓库唯一集中写出课程表名的地方，保留它是为了让旧库仍可清理。
 - **Redis 里可能有 `icr:order:*` 残留键**（3 个，无 TTL）。这是**已删除的秒杀/订单域**留下的历史计数键，不会再产生，可安全删除。注意 `icr:reservation:*` 是**在用的**按日自增键，不要误删。
+- **本机 RabbitMQ 上残留两个课程死队列** `hello,queue1` / `hello,queue2`（durable、非 auto-delete，各积压 1 条消息）。声明它们的课程时代监听器与测试类已在 Phase 10 删除，**仓库里已无任何引用**；属 broker 侧状态，不影响本项目运行（本项目只用 `reservation.*` 的交换机与队列）。
 
 **安全**
 
