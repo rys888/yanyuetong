@@ -83,9 +83,21 @@ class Result { Boolean success; String errorMsg; Object data; Long total; }   //
 
 → **结论（决定页面树）**：**除了登录页，前端没有任何公开页面。** 未登录用户看不到"实验室浏览/设备浏览"。**不存在"未登录首页"**，路由守卫必须是"未登录 → 一律跳 `/login`"。
 
-> 📌 README §13 里那几条**不带 header 的浏览类 curl 示例**（`curl 'http://localhost:8081/laboratory/list?current=1'`）实际会返回 401 —— 这是**文档缺口**，见 §11 D-1。
+> 📌 README §13 里那几条**不带 header 的浏览类 curl 示例**（`curl 'http://localhost:8081/laboratory/list?current=1'`）实际会返回 401 —— 这是**文档缺口**，见 §11 D-10（**订正**：此处原写 D-1，系笔误——D-1 是验证码缺口，与 README 示例无关）。
 
 **登出**：`POST /user/logout` 读 `authorization` header 删除 token【实测：200 `{"success":true}`，随后同 token 访问 `/user/me` → 401】。
+
+> ⚠️ **`/user/logout` 本身受 `LoginInterceptor` 保护**（它**不在** `excludePathPatterns` 的两个路径里）——【实测】无效 token → `401` 空体；**根本不带 token → 也是 `401` 空体**。
+> **这条直接决定 F2 的登出实现顺序**：必须**先带 token 调后端**（否则 Redis 里的会话不会被删，旧 token 还能再用 30 分钟），**再**清本地状态；且**后端返回什么都必须清本地**（用户点"退出"的意图是"让我退出"，不是"请后端批准"）。
+> F2 验收④（登出后旧 token 请求返回 401）正是在测这个顺序**有没有写反**——写反了该用例就会拿到 200。
+
+**F2 用到的另外三条实测事实**（2026-10-06，`--server.port=18081`）：
+
+| 事实 | 实测值 | 对 F2 的含义 |
+|---|---|---|
+| `POST /user/login` 成功体 | `{"success":true,"data":"54425a125e8145c4b9af349f817b4964"}` —— **`data` 是裸字符串**（32 位 UUID 去横线），**不是对象** | `store.login()` 取 `result.data` 即为 token；**不得**写成 `result.data.token` |
+| `GET /user/me` 的 `icon` | USER(id=1) → `"/imgs/blogs/blog1.jpg"`；LAB_ADMIN(id=1016) → `""`（空串，**非 null**，故 `non_null` 不会丢键） | **两种取值都不可用**：前者是黑马遗留路径，后端**已不存在静态资源目录**【实测 `src/main/resources` 下只有 `db/`、`mapper/`】，`/imgs/blogs/blog1.jpg` 带 token 返回 **404**、不带 token 返回 **401**；后者是空串。→ **F2 不得把 `icon` 直接塞进 `<img src>`**，一律用昵称首字生成占位头像 |
+| `POST /user/login` 请求体非法 JSON | **`400`** + Result 形状 `{"success":false,"errorMsg":"请求体格式错误"}` | 归一为 `kind='error'`（§7.3 第 5 行），页面展示 `errorMsg` 即可，**不需要为此写特例** |
 
 ### 1.4 端点全表（33 个，7 个 Controller）
 
@@ -571,7 +583,7 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 |---|---|---|---|---|
 | **F0** 工程初始化 | Vite+Vue3+EP+Router+Pinia 骨架；**dev proxy 打通**；空壳布局；`.gitignore` | `frontend/**`（骨架）、`vite.config.js`、`package.json`、`.env.*` | 仅用于冒烟：`POST /user/code` | 后端全部；`README.md`；`scripts/**` |
 | **F1** 请求层与状态常量层 | `request.js` 五通道归一化 + **bigint 安全解析**；`enums.js`/`statusMap.js`；`StatusTag.vue` | `api/bigintJson.js`、`api/normalize.js`、`api/createRequest.js`、`api/request.js`、`constants/*`、`components/StatusTag.vue`、`scripts/verify-request-layer.mjs` | 全部（作为基础设施，无具体业务调用） | 同上；且**不得**在此 Phase 写任何业务页面 |
-| **F2** 登录与会话 | 登录页、验证码倒计时、token 持久化、路由守卫、角色菜单分流、退出登录 | `views/login/*`、`stores/user.js`、`router/index.js` | `POST /user/code`、`POST /user/login`、`GET /user/me`、`POST /user/logout` | 后端；`user/me` 之外的用户接口 |
+| **F2** 登录与会话 | 登录页、验证码倒计时、token 持久化、路由守卫、**两个 Layout 与角色菜单分流**、退出登录、403/404 页 | **新增**`views/login/LoginView.vue`、`views/home/HomeView.vue`、`views/admin/AdminHomeView.vue`、`views/error/{ForbiddenView,NotFoundView}.vue`、`layouts/{AppLayout,AdminLayout}.vue`、`stores/user.js`、`router/guard.js`、`scripts/verify-session.mjs`；**修改**`api/user.js`、`api/request.js`、`router/index.js`、`main.js`；**删除**`views/SystemCheck.vue` | `POST /user/code`、`POST /user/login`、`GET /user/me`、`POST /user/logout`（**仅此 4 个**） | 后端全部；`user/me` 之外的用户接口；**F1 的 `api/{bigintJson,normalize,createRequest}.js`、`constants/*`、`components/StatusTag.vue` 一个字节不许动**；不得引入任何新依赖 |
 | **F3** 学生·实验室与设备浏览 | 实验室列表/详情、设备列表（筛选）/详情；分页 5/页；空态与 loading | `views/laboratory/*`、`views/equipment/*`、`api/laboratory.js`、`api/equipment.js` | `GET /laboratory/list`、`/laboratory/{id}`、`GET /equipment/page`、`/equipment/{id}`、`GET /equipment-category/list` | 后端；管理端页面 |
 | **F4** 学生·批次浏览（只读） | 批次列表（按设备/实验室过滤）、批次详情；`bookingState` 驱动按钮可用性 | `views/batch/*`、`api/reservationBatch.js` | `GET /reservation-batch/page`、`/reservation-batch/{id}` | 后端；提交动作（F5 才做） |
 | **F5** 提交预约与异步体验 ★ | **本项目技术展示核心**：提交 → loading → 受理态 → 轮询 `GET /reservation/{id}` → 终态；503 两种文案分别处理；防重复提交 | `views/batch/SubmitResult.*`、`api/reservation.js` | `POST /reservation`（+ 轮询 `GET /reservation/{id}`） | 后端；F6 的"我的预约"页面 |
@@ -590,6 +602,18 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 
 ② **F1 验收判据从「页面里手工触发 5 种场景」改为「Node 脚本打真实后端」**。理由：五通道里有三条（401 空体、403 空体、403 有体）**无法从页面自然触发**，需要伪造响应；而伪造出来的响应只能证明"我按我的理解解析了我的伪造体"，是自证循环。改为把请求层拆成**不依赖 `import.meta.env` 的纯模块**（`bigintJson.js` / `normalize.js` / `createRequest.js`），由 `scripts/verify-request-layer.mjs` 用真实 axios 打**真实后端**取真实响应，再断言 `kind`。这同时使 ① 的 bigint 往返成为**可判别**的（对照：同一响应体用原生 `JSON.parse` 解析后 `id` 必然 ≠ 原值，见 §1.6）。③ **验收③的范围由「11 个枚举」订正为「7 个枚举 / 25 个取值」**。理由：`git grep` 实测只有 7 个枚举出现在 VO/DTO 字段上；另 4 个（`ReservationResultCode`/`ReservationPersistResult`/`ReservationRequestStatus`/`ReservationCancelOutcome`）是内部状态机，前端**根本收不到**它们的枚举名。原判据要求"11 个枚举每一个取值都有条目"，会迫使实现方**凭空为 4 个不可达枚举编造中文 label** —— 这正是"不得自行创造"红线。附带地，验收④（"无 `if (status ===` 字面量"）**不适用于 F1**：`SystemCheck.vue` 里的 `'idle'|'success'|'failure'` 是页面本地 UI 状态、不是后端枚举，该判据从 F3 起对业务状态渲染生效。
 
+**F2 相对本表的三处设计决定（派发前记录，非事后追认）**：
+
+① **删除 `views/SystemCheck.vue`**。理由：它是 F0 的"代理是否打通"自检页，其职责已被 F2 的真实登录链路**更强地**覆盖；F2 之后不再有任何路由指向它，留着就是不可达死代码。**代价已登记、不粉饰**：F1 人工流程里"再走一遍 F0 的代理自检页"那句随之失效，§10 的 F1 行已同步改为"走登录页复验代理"。
+
+② **守卫判定抽成纯函数 `router/guard.js`**：`resolveNavigation({ to, token, profile })` → `true | RouteLocationRaw`。理由：§10 F2 的 ①③ 两条是全 Phase 判别性最强的验收点，但在浏览器里既难自动跑、也无法在 Node 里断言。抽成**不依赖 vue-router 运行时、不依赖 DOM** 的纯函数后，`scripts/verify-session.mjs` 可以对它直接断言真值表。这不是过度设计——它就是 F1"把请求层拆成纯模块以便真机断言"的同一手法。
+
+> **2026-10-06 F2 Review 补正（重要，别把它当已完备）**：只抽 `resolveNavigation` **不够**。第一次交付时 `beforeEach` 里的接线仍是 `if (!to.meta.public && store.token && !store.profile)`，而 `/login` 是 `meta.public:true`，导致真值表**第 1 行在硬刷新下永不触发**（带着有效 token 打开 `/login` 会看到登录表单）。更关键的是：验收脚本直接拿**手工构造的入参**喂纯函数，所以它**对这个接线完全瞎**——实测把接线换成三种截然不同的版本（缺陷在位 / 修好 / `fetchMe` 彻底摘掉即全站不可用），脚本判决**都是 `19 PASS, 0 FAIL`，一模一样**。故补上第二个纯导出 **`needsProfileFetch({ to, token, profile })`（语义 `token && !profile`，**不含** `to.meta.public`）**，并额外加一条**静态文本断言**（脚本读 `router/index.js` 源码，断言 `beforeEach` 段含 `needsProfileFetch(` 且不含 `to.meta.public`）。静态断言在输出里必须标注"不是行为验证"——因为 `router/index.js` import 了 `.vue`，Node 里加载不了，调用的存在性只能这样锁。**教训一句话：抽了判定不等于抽了接线；判据的作用域必须和缺陷的作用域对齐。**（该修法已于同日落地并由我独立复核：四个变体实测见 §10 的"返工复核"。）
+
+③ **菜单由路由表驱动**（`meta.menu = { title, icon, order }`），Layout 只渲染「当前角色可见 **且** 已注册」的项。理由：F7–F10 会陆续加管理端页面，硬编码菜单意味着**每个 Phase 都要回头改 Layout**，且中间态会出现"菜单点进去 404"的死链。路由驱动后 F2 管理端只有"管理首页"一项，后续 Phase 加路由即自动出现。
+
+**F2 的唯一跨 Phase 耦合点（Review 时重点看）**：`api/request.js` 的 `getToken` 要从 F1 的 `() => null` 换成读 Pinia，于是形成循环导入 `stores/user.js → api/user.js → api/request.js → stores/user.js`。安全条件是**只在 `getToken` 的函数体内读 store**、不得在模块顶层解构（ESM 循环里顶层解构会拿到 TDZ 绑定）。**同时禁止** `api/request.js` 直接 import `router` —— 401 跳转改为由 `main.js` 注入 handler，否则循环会绕回路由层。
+
 ---
 
 ## 10. 每个 Phase 的验收标准与人工测试流程
@@ -599,8 +623,8 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 | Phase | 验收标准（全部满足才算 PASS） | 人工测试流程 |
 |---|---|---|
 | **F0** | ① `npm run dev` 启动无报错；② 页面加载出空壳布局；③ **从浏览器发出 `POST /user/code` 返回 `{"success":true}`**（证明代理打通，若直连后端会被 CORS 拦掉）；④ `npm run build` 成功；⑤ 后端目录 `git status` 无变化 | 起后端 → 起前端 → 打开 `http://localhost:5173` → 打开 DevTools Network，点"发送验证码"，看到请求 URL 是 `http://localhost:5173/api/user/code`（经代理）且 200 |
-| **F1** | ① **把 `645589569487503751` 这类 id 经请求层往返后与后端值逐位相同**（bigint 处理生效的**判别性**验收，见下方偏差②）；② 5 条通道各自归一化到正确的 `kind`（401 空体 → `unauthorized` / 403 空体 → `forbidden` / 403 有体 → `denied` / 200+`success:false` → `business` / 非 Result 体 → `clientError`）；③ `statusMap` 对 **7 个枚举的全部 25 个取值**都有条目（见下方偏差③），未知值降级为"未知（原值）"；④ `npm run check:request` 退出码 0；⑤ 后端目录 `git status` 无变化 | 起后端（18081）→ `VERIFY_BACKEND=http://127.0.0.1:18081 npm run check:request`（脚本用真实 axios **直连**后端，**不经 Vite 代理、非 mock**）→ 再取一个真实 USER token 跑 `VERIFY_TOKEN=<token> VERIFY_BACKEND=... npm run check:request`，使 `forbidden`/`denied`/`clientError` 三条**无 token 到不了的**通道也得到真机验证；最后 `npm run dev` 走一遍 F0 的代理自检页确认未回归 |
-| **F2** | ① 未登录访问任意路由（含 `/admin/**`）→ 全部跳 `/login`；② 登录成功后有 token 且 `GET /user/me` 显示昵称与角色；③ USER 访问 `/admin` → 显示 403 页；LAB_ADMIN 访问 `/admin` → 正常；④ 退出登录后回 `/login` 且旧 token 请求返回 401；⑤ 验证码错误时展示后端 `errorMsg`（T2 形态 200+success:false） | 用 13686869696（USER）与 13900000001（LAB_ADMIN）各登录一次；在另一个标签页点退出，回原标签页任意操作应被踢回登录页 |
+| **F1** | ① **把 `645589569487503751` 这类 id 经请求层往返后与后端值逐位相同**（bigint 处理生效的**判别性**验收，见下方偏差②）；② 5 条通道各自归一化到正确的 `kind`（401 空体 → `unauthorized` / 403 空体 → `forbidden` / 403 有体 → `denied` / 200+`success:false` → `business` / 非 Result 体 → `clientError`）；③ `statusMap` 对 **7 个枚举的全部 25 个取值**都有条目（见下方偏差③），未知值降级为"未知（原值）"；④ `npm run check:request` 退出码 0；⑤ 后端目录 `git status` 无变化 | 起后端（18081）→ `VERIFY_BACKEND=http://127.0.0.1:18081 npm run check:request`（脚本用真实 axios **直连**后端，**不经 Vite 代理、非 mock**）→ 再取一个真实 USER token 跑 `VERIFY_TOKEN=<token> VERIFY_BACKEND=... npm run check:request`，使 `forbidden`/`denied`/`clientError` 三条**无 token 到不了的**通道也得到真机验证；最后 `npm run dev` 走一遍 F0 的代理自检页确认未回归（**F2 起该页已删除**，届时改走登录页复验代理；见 §9 的 F2 设计决定①） |
+| **F2** | ① 未登录访问任意**已注册**路由（含 `/admin/**`）→ 全部跳 `/login?redirect=<原路径>`；且 `redirect` 必须校验为**站内路径**（`//evil.com`、`https://…`、`javascript:` 一律忽略并回落默认首页）。**排除 `/:pathMatch(.*)*` 兜底页**：未登录访问不存在的路径看到 404 页，比看到登录页更正确，不作为缺陷（此条为 2026-10-06 F2 实测后订正——原文写「任意路由」，与规格里兜底页 `meta.public:true` 自相矛盾）；② 登录成功后有 token，且 `GET /user/me` 显示昵称与角色（角色文案取 `statusMap.UserRole`，**不得**在页面里写 `role === 'LAB_ADMIN' ? … : …`）；③ USER 访问 `/admin/**` → 403 页；LAB_ADMIN 访问 `/admin/**` → 正常；④ **退出登录后回 `/login`，且旧 token 再请求 `/user/me` 得到 401**——该条测的是"**先带 token 调后端、再清本地**"的**顺序**，写反了会拿到 200（因为 Redis 会话没被删）；⑤ 验证码错误时展示后端 `errorMsg`（T2 形态 `200`+`success:false` → `kind='business'`）；⑥ **`node scripts/verify-session.mjs` 退出码 0**，且四组断言全过：**守卫真值表（6）／redirect 消毒与默认路由（15）／`needsProfileFetch` 谓词行为（4）／静态接线文本检查（1）**。**光看退出码不算过**——`VERIFY_BACKEND` 未设置时脚本会打印 SKIP 并**照样退 0**（实测），必须确认输出里真的出现了那 3 条真机会话断言（`backend login…` / `backend /user/me…` / `backend logout…`），而不是 SKIP 文案。无 env 基线 = **24 PASS**；带真机 = **27 PASS**；⑦ `npm run build` 成功、`npm run check:request` 仍退出码 0（F1 未回归）、后端目录 `git status` 无变化 | 后端 `--server.port=18081` 启 → **取码前先确认没有别的脚本刚调过 `/user/code`** → 从**后端日志**取 6 位码 → `VERIFY_BACKEND=http://127.0.0.1:18081 VERIFY_CODE=<6位码> npm run check:session`；**再**跑 `npm run check:request`。**顺序不可颠倒**：`check:request` 内部会 `POST /user/code`（F1 契约用例），会把你手上的码顶掉，颠倒后 `check:session` 会因"验证码错误"失败，看起来像实现 bug（2026-10-06 实测发现的运行顺序约束）；再 `npm run dev` 手工走：13686869696（USER）与 13900000001（LAB_ADMIN）各登录一次；开两个标签页，A 登出后回 B 点任意链接应被踢回登录页；手工把地址栏改成 `/admin` 验证 USER 落到 403 页、LAB_ADMIN 正常进入 |
 | **F3** | ① 实验室列表显示 4 条、分页控件显示总数；② 点进详情正确显示；③ 设备列表 12 条分 3 页，`name`/`categoryId`/`status` 筛选各自生效（筛选后 total 变化）；④ `GET /laboratory/999999` 显示"实验室不存在"（**不得白屏**）；⑤ `GET /equipment/999999` 显示"设备不存在" | 依次切换筛选条件并核对 total；手工把 URL 的 id 改成 999999 验证两个详情页的容错 |
 | **F4** | ① 批次列表在无数据时显示空态（当前库中 `tb_reservation_batch` 为 0 行，属正常）；② 管理端发布一个批次后，学生端能看到；③ 详情页的**按钮可用性完全由 `bookingState` 驱动**（`OPEN` 才可点"立即预约"，其余为禁用+原因提示）；④ `GET /reservation-batch/999999` 显示"预约批次不存在"（200 形态）；⑤ 前端**不发送** `status=DRAFT/CANCELLED`（会 400） | 用管理员发一个批次；回学生端点进去；观察 `bookingState=OPEN` 时按钮可用、把系统时间理解成 `NOT_STARTED` 场景时按钮禁用提示"未开始预约" |
 | **F5** ★ | ① 点击"立即预约"后按钮进入 loading 且**不可重复点击**；② 成功后展示"预约请求已提交"并**在 ≤10s 内**自动给出终态（实测窗口 ≈46–114ms，10s 上限是安全余量）；③ **轮询期间遇到 403（`"无权查看该预约"`）继续重试而不是直接报错**；④ 400 时直接展示后端中文 `errorMsg`（如"你已预约过该批次"）；⑤ 503 两种文案分别提示，`预约结果待确认，请稍后查询` 时引导到"我的预约"；⑥ **提交成功后跳转/刷新"我的预约"能看到该条记录**；⑦ 全链路中 `reservationId` 未被 JS 精度破坏（否则会出现莫名 403） | 学生登录 → 设备 → 批次 → 立即预约 → 观察结果面板；再点一次验证"你已预约过该批次"；把批次名额消耗完后提交验证"名额已约满" |
@@ -613,18 +637,77 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 
 ---
 
+### F2 验收实测记录与**覆盖边界**（2026-10-06，Claude 独立实测）
+
+**跑通的命令与结果**（后端 `java` pid 77090 监听 `*:18081`；码 `193087` 取自 `/tmp/f2-backend.log` 的 `验证码：`）：
+
+| 命令 | 结果 |
+|---|---|
+| `VERIFY_BACKEND=http://127.0.0.1:18081 VERIFY_CODE=<码> node scripts/verify-session.mjs` | **22 PASS / 0 FAIL / exit 0**，三套件（守卫真值表 + 静态冒烟 + 真机会话）**都真的执行了** |
+| `npm run check:request` | **exit 0**，22 PASS / 0 FAIL（F1 未回归） |
+| `npm run build` | **exit 0**，1685 modules，242 ms |
+| `git status --porcelain -- src pom.xml README.md` | 空（后端零接触） |
+| `command grep -rnE "if *\( *status *===|role *=== *'LAB_ADMIN'" src/views src/layouts` | 空（状态/角色一律走 `resolveStatus`） |
+| `command grep -rl "后端控制台日志" dist/` | 空（`import.meta.env.DEV` 被正确剔除，DEV 提示不进生产包） |
+| `git diff -- frontend/package.json` | 只多 `check:session` 一行；`dependencies`/`devDependencies` 零改动 |
+
+**证伪实验（证明那 22 条"绿"是有判别力的，不是恒真）** —— 逐个变体单独跑、逐个验证守卫串、复原后 `shasum -a 256` 比对 byte-exact：
+
+| 变体 | 预期 | 实测 | 结论 |
+|---|---|---|---|
+| 改坏守卫真值表第 1 行条件 | 恰好 1 条失败 | `18 PASS, 1 FAIL`（就是第 1 行那条） | 有判别力 |
+| 去掉 `sanitizeRedirect` 对 `/login` 的拦截 | 恰好 2 条失败 | `17 PASS, 2 FAIL`（两条 `/login` 用例） | 有判别力 |
+| 删掉真值表第 5 行角色校验 | 恰好 1 条失败 | `18 PASS, 1 FAIL` | 有判别力 |
+| **把 `beforeEach` 接线换三种版本**（缺陷在位 / 修好 / `fetchMe` 彻底摘掉） | —— | **三种都是 `19 PASS, 0 FAIL`** | **判据对这段接线没有覆盖**（就是上面 §9 ② 补正里那条缺陷） |
+
+> **一次变体作废的记录**：第一个变体我用 `sed` 把 `&& profile` 换成 `&& !profile`，但 `&` 在 sed 替换串里是"整个匹配"占位符，转义后仍没生成目标串，`guard.js` 变成语法错误 → 输出 **18 FAIL**。而我的预期是"恰好 1 FAIL"——**签名不符**，所以我没有把它当成"判据有判别力"的证据，而是先怀疑变体本身、重做（改用不含 `&` 的替换串，得 `18 PASS, 1 FAIL`）。教训与台账里"守卫串/正则必须先自证"同族：**失败数量与预期不符时，先怀疑自己的实验装置**。
+
+**覆盖边界（必须分清，否则下一轮又会把"脚本全绿"误读成全覆盖）**：
+
+| 层级 | 覆盖内容 |
+|---|---|
+| **A. 脚本行为断言（真机可复跑）** | `resolveNavigation` 6 行真值表、`sanitizeRedirect` 10 条 + 3 类非字符串输入、`defaultRouteFor`、`api/request.js` 能在裸 Node 里 import 不抛、以及 3 条真机会话断言（登录返回裸串 token / `/user/me` 的昵称角色 / **登出后旧 token 立刻 401**）。末条是验收④的**判别性**证据：顺序写反（先清本地、不调后端）会拿到 200。 |
+| **B. 脚本静态文本断言（**不是**行为验证）** | `router/index.js` 的 `beforeEach` 段含 `needsProfileFetch(`、不含 `to.meta.public`。这是妥协：该模块 import 了 `.vue`，Node 加载不了。输出里必须标注其性质。**它的能力边界已实测**（见下方 W3）：它锁的是"文本特征在不在"，**不锁调用参数**。 |
+| **C. 仅由我读码确认（无自动判据）** | `main.js` 的 `setUnauthorizedHandler(handleUnauthorized)` 注入时机与 `wasLoggedIn` 判定；`api/request.js` 的 `getToken` 只在箭头函数体内读 store（ESM 循环安全条件）；`stores/user.js` 的 `logout` 用 `try { await logoutApi() } finally { this.reset() }` **先调后端再清本地**——注意脚本只证明了**后端**"登出后旧 token 401"，**没有**证明 store 的调用顺序，两者别混。 |
+| **D. 只能人工点（脚本测不到）** | 三个接线点的浏览器实际行为：① 401 时是否真的跳登录页并带上 `redirect`；② 请求头里是否真的挂上了 `Authorization`；③ `beforeEach` 的真实导航结果（含硬刷新 `/login` 带有效 token 是否被送回首页——即缺陷 1 的修复效果）。F2 提交前这几条以"人工点过"汇报，**不得**记作"脚本证明"。 |
+
+#### 返工复核（2026-10-06，第 2 轮：修缺陷 1 之后）
+
+**范围证明**（不靠"Codex 说只改了三个文件"）：用 mtime 定位返工窗口内的写入，只有 `guard.js`、`index.js`、`verify-session.mjs` 三个文件的 mtime 落在返工窗口（18:51–18:52）；`api/request.js`、`layouts/`、`views/`、`stores/`、`main.js`、`package.json` 的 mtime 仍是首次交付时的 18:41–18:44，未被动过；`docs/` 的 18:50:39 是我自己的文档修改（早于 Codex 的写入），故"Codex 未触碰 docs"得到证实而非采信。
+
+**命令结果**：`node scripts/verify-session.mjs`（无 env）**24 PASS / 0 FAIL / exit 0**；加真机 `VERIFY_BACKEND`+`VERIFY_CODE` → **27 PASS / 0 FAIL / exit 0**，且 3 条真机会话断言**实际执行**（非 SKIP）；`npm run check:request` **exit 0 / 22 PASS**（F1 未回归）；`npm run build` **exit 0**。已通过的断言未被放宽——前 150 行与返工前**逐字相同**，`icon` 的精确断言**保留**并**追加**了类型/非空断言与 D-12 注释。
+
+**四个接线变体（我自己复现 RED/GREEN，不采信自述）**：
+
+| 变体 | 实测 | 说明 |
+|---|---|---|
+| W1 调用点改回旧门控 `!to.meta.public && token && !profile` | `23 PASS, 1 FAIL` | 静态文本锁抓到 |
+| W2 调用点改成 `if (false)`（永不 fetchMe） | `23 PASS, 1 FAIL` | 静态文本锁抓到 |
+| W3 调用点传错参数 `needsProfileFetch({ to, token: null, profile })` | **`24 PASS, 0 FAIL`** | **残留缺口：文本特征齐全、接线已坏，脚本全绿** |
+| W4 把公开路由门控塞回**纯函数内部**（`index.js` 不动，绕过文本锁） | `22 PASS, 2 FAIL` | **行为断言**抓到（比文本锁强得多） |
+
+**W3 的处置（记录为已知代价，不再为此加一轮返工）**：文本锁锁的是标记存在性、锁不住调用参数。要堵 W3 需把断言收紧成钉死整串 `needsProfileFetch({ to, token, profile })` 的正则——但那种写法对格式化极脆，且 W3 是"显式写 `token: null`"这种没人会顺手犯的错；而现实中最可能的回归（"有人又把公开路由门控加回来"）**W1 与 W4 都抓得到**，且 W4 是行为级抓捕。**权衡结论：静态锁保持现状，其边界在此显式登记，不粉饰。**
+
+**这一版 `needsProfileFetch` 语义（`token && !profile`，无公开路由门控）的一个已接受副作用**：带**过期 token** 打开公开页（如不存在的 URL → 404 页）也会触发一次 `fetchMe` → 401 → `handleUnauthorized` 清本地并跳 `/login`。即"会话已死时访问错 URL 会被引导去登录"而不是停在 404 页。**接受理由**：行为统一为"硬进入任何路由恰好校验一次会话"，无特例分支，且能自愈客户端的过期会话；代价仅是一次 GET。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**
 
 ### A 类（建议批准，否则核心链路受限）
 
-**D-1 · 登录验证码无法从前端获得**（**不修则每次演示都必须盯服务端控制台**）
+**D-1 · 登录验证码无法从前端获得** → 【2026-10-06 用户裁定：**走「不改后端的替代方案」**，即从后端日志读码；**不新增 `expose-code` 开关**】
+
 1. **页面需要什么**：登录页要能完成登录。
 2. **后端缺什么**：`POST /user/code` 只返回 `{"success":true}`，验证码只写进服务端日志（`UserServiceImpl` 的 `log.debug`）。
-3. **是否必须**：演示层面**必须**（这是唯一的登录入口，且没有管理员注册入口）。
-4. **推荐最小修改**：新增配置 `yanyuetong.login.expose-code`（默认 `false`），**仅在 `local` profile 下开启**时把验证码放进 `Result` 的 `data`。**明确风险**：该开关等于关闭认证，**绝不能在任何非本机 profile 生效**；必须与 `default false` 一起提交。不改 `Result` 结构、不改接口路径。
-   *不改后端的替代方案*：演示时从后端控制台读码（可行，但每次演示都要人肉搬运）。
+3. **决议与理由**：曾提的 `expose-code` 开关**等于在配置层面关闭认证**，一旦误开在任何非本机 profile 就是真实漏洞；而本项目是**本机单人演示**，"读日志"的成本只是每次演示看一眼控制台。**用一处人肉成本换掉一个认证旁路，值得。** 不新增开关、不改 `Result` 结构、不改接口路径、**后端零改动**。
+4. **该路径已实测可用（不是推测）**：`logging.level.com.yanyuetong: debug` 确实生效（`application.yaml:46`，且 `application-local.yaml` 未覆写日志级别），因此 `log.debug` 会打印。实测链路——
+   `POST /user/code?phone=13686869696` → 200 `{"success":true}`，日志出现 `发送短信验证码成功，验证码：470135`；
+   取该 6 位码 `POST /user/login` → 200 `{"success":true,"data":"54425a12…（32 位无横线）"}`，`GET /user/me` → `role:"USER"`。**整条闭链已跑通。**
+5. **代价（明确登记，不粉饰）**：① 演示必须同时开着后端控制台；② **`npm run check:session` 无法全自动**——脚本不能自己"看见"控制台，故验证码经 `VERIFY_CODE` 环境变量传入（由人从日志里取一次），**这不是 mock**：码仍是后端真码，只是由人搬运，与 §10 F1 的"用真机响应而非伪造响应"同一条原则。
+6. **前端配套**：登录页在 `import.meta.env.DEV` 下显示一行浅色提示"验证码见后端控制台日志"，**生产构建不出现**（`npm run build` 产物中不得含该文案）。
 
 **D-2 · 管理端无法知道自己"负责哪些实验室/设备"**
 1. **页面需要什么**：管理端要展示"我的实验室/我的设备"，并据此决定按钮是否可点、列表是否该出现该行。
@@ -661,6 +744,8 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 **D-8 · 设备分类无管理端点**：`GET /equipment-category/list` 只读，无增删改。分类属基础数据，设备表单用它做下拉即可。（**不建议改**。）
 
 **D-9 · 死信列表全局可见、无归属过滤**：**这不是缺陷**——死信治理是消息层运维视角，与实验室归属无关，且有 `@RequireRole(LAB_ADMIN)` 守护。登记为**设计说明**而非缺口。
+
+**D-12 · `UserDTO.icon` 没有任何可用取值**（F2 实测发现，登记为**设计说明**而非缺口）：两种实测取值都不可用——USER(id=1) 是黑马遗留路径 `"/imgs/blogs/blog1.jpg"`（后端已无静态资源目录，带 token `404` / 不带 token `401`），LAB_ADMIN(id=1016) 是**空串**（非 null，故 `non_null` 不丢键）。**前端对策（F2 落地）**：**不渲染 `icon` 图片**，一律由 `nickName` 首字生成文字头像。理由：这既避开死图，又不用为"头像"引入上传端点或默认图资源；**不改后端**。
 
 ### D 类（文档缺口，由我修订，不涉及后端代码）
 
