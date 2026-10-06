@@ -350,7 +350,9 @@ LIMIT #{limit}
 
 `catch` 同样只 `log.error`（`:166-169`）⇒ 队首行永久失败则恒占名额。**后果比第一处更严重**：`quota_released` 永远不置 1，那条已取消预约占的 Redis 名额**永久泄漏**，实验室显示有空位却约不上——是资源泄漏，不只是对账延迟。
 
-**为什么两处都要修**：同一个 `ORDER BY 时间列 ASC LIMIT n` + catch 不触库的写法，只在 `reconcile` 修掉等于留一半。**修法不能照抄**：`tb_reservation` **没有** `fail_reason` 列（实测列清单恰为 7 列：`id, user_id, batch_id, status, quota_released, create_time, update_time`——**没有** `active_flag`，初稿从旧文档抄错了，一并更正），因此只用**显式 bump 既有的 `update_time`**（`LambdaUpdateWrapper.set(Reservation::getUpdateTime, now())`，WHERE 只按 id）。这不引入任何新列、新表、新脚本——按本文档自己在上一段立的取舍标准（"加列要 DDL = 新机械"），这是唯一不越线的选择。
+**为什么两处都要修**：同一个 `ORDER BY 时间列 ASC LIMIT n` + catch 不触库的写法，只在 `reconcile` 修掉等于留一半。**修法不能照抄**：`tb_reservation` **没有** `fail_reason` 列（实测权威列清单为 **8 列**：`id, user_id, batch_id, create_time, update_time, status, quota_released, active_flag`——最后一个是 `phase9_reservation_lifecycle.sql:5` 加的 **STORED 生成列**，`information_schema.COLUMNS.EXTRA = STORED GENERATED`，配合唯一键 `uk_user_batch_active(user_id, batch_id, active_flag)` 约束活跃预约），因此只用**显式 bump 既有的 `update_time`**（`LambdaUpdateWrapper.set(Reservation::getUpdateTime, now())`，WHERE 只按 id）。这不引入任何新列、新表、新脚本——按本文档自己在上一段立的取舍标准（"加列要 DDL = 新机械"），这是唯一不越线的选择。
+
+**订正记录（我自己在本文档里写错过一次，勿再沿用）**：本段曾被我改成"实测列清单恰为 7 列……**没有** `active_flag`"，那是**错的**——我当时是拿一份旧的压缩摘要当依据去"更正"，没有回查 `information_schema`。`active_flag` 确实存在。**教训与 §3.13 的判据自证同源：任何"某列不存在"的结论都必须现场查 `information_schema` 得出，不得引用二手清单。**
 
 **长期失败行必须每次都能被推动**：两处的 bump 都必须是**无条件、显式**的赋值，不能依赖 `ON UPDATE CURRENT_TIMESTAMP`（理由见上节实测）。否则第二处会退化成"泄漏一次就永久泄漏"。
 
