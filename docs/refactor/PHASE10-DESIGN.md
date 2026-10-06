@@ -278,17 +278,25 @@
 
 ### 3.6 [决策] P1 修复 F4：`DELETE /laboratory/{id}` 加依赖检查
 
-**现状**：不检查是否存在依赖设备/批次 → 删实验室会留下孤儿 `tb_equipment.laboratory_id` 与孤儿 `tb_reservation_batch`。
+**现状**：不检查是否存在依赖设备 → 删实验室会留下 `tb_equipment.laboratory_id` 的孤儿引用（这些设备从此指向不存在的实验室，且其上的预约批次再也无法通过 lab 反查）。
 
-**设计**：删除前检查 `tb_equipment`（按 `laboratory_id`）与 `tb_reservation_batch`（按 `laboratory_id`）是否存在引用；存在则抛 `BadRequestException`，文案分别指明是设备还是批次，让调用方能自助判断。**必须放在同一 `@Transactional` 内**，且检查与删除之间不留窗口（同事务已足够：`DELETE` 与 `SELECT` 在同一事务，配合既有唯一/外键约束的缺失，接受"检查-删除"不是原子"——登记为已知边界，因为本项目无并发删实验室的场景）。
+**设计修正（初稿写错了，已核库改正）**：初稿写"检查 `tb_equipment`（按 `laboratory_id`）**与** `tb_reservation_batch`（按 `laboratory_id`）"——**后者不可能实现**：实测 `information_schema`，`tb_laboratory` 只被 **一张表**引用，即 `tb_equipment.laboratory_id`；`tb_reservation_batch` 没有 `laboratory_id` 列（它只有 `equipment_id`）。因此检查只有一处，且**不是"少查了一层"而是本就冗余**：批次必须挂在设备上，拦住了"实验室下有设备"就必然拦住了其上的批次（无设备则不可能有指向该实验室的批次）。多查一张表既是错误实现也是过度设计。
 
-**契约变更**：这是**行为变更**（原先能删的现在会被拒），必须在 README「API 示例 / 已知边界」与 `MIGRATION_STATUS.md` 显式登记，并单独一个测试用例覆盖"有依赖 → 拒绝 + 无副作用"与"无依赖 → 仍可删"。
+**实际设计**：删除前统计 `tb_equipment` 中 `laboratory_id = {id}` 的行数，> 0 则抛 `BadRequestException("该实验室下仍有 N 台设备，请先转移或删除设备")`（文案给出数量，便于自助判断）。检查与删除放在同一 `@Transactional` 方法内——`SELECT` 与 `DELETE` 同事务，足以覆盖本项目的使用场景；**"检查-删除"不是原子操作**（表上无外键约束，两个并发删除请求理论上可交错），登记为已知边界：本项目无并发删实验室的场景，且代价仅为一条孤儿引用，不引入悲观锁/新机械。
+
+**契约变更**：这是**行为变更**（原先能删的现在会被拒），必须在 README「API 示例 / 已知边界」与 `MIGRATION_STATUS.md` 显式登记，并单独测试用例覆盖"有依赖 → 拒绝 + 实验室仍在"与"无依赖 → 仍可删"两组。
 
 ### 3.7 [决策] P1 修复 F3：`admin_user_id` 不外泄
 
 **现状**：`GET /laboratory/list`、`GET /laboratory/{id}` 直接序列化实体，把 Phase 5.1 新增的 `admin_user_id` 暴露给任意已登录用户。
 
-**设计**：走 **VO**（`LaboratoryVO`），与既有 `EquipmentVO` / `ReservationVO` / `ReservationBatchVO` 的模式一致——`admin_user_id` 不进 VO。**不用 `@JsonIgnore`**：该字段在**管理侧**（`/laboratory/manage*`）需要回显给管理员，`@JsonIgnore` 会把两侧一起掐掉。返回 VO 只改公开读端点，管理侧仍返回实体（或同样用 VO 但含该字段），保持 Phase 5 管理端契约不变。
+**设计**：走 **VO**（`LaboratoryVO`），与既有 `EquipmentVO` / `ReservationVO` / `ReservationBatchVO` 的模式一致——`admin_user_id` 不进 VO，只改 `GET /laboratory/list` 与 `GET /laboratory/{id}` 两个公开读端点。
+
+**理由修正（本文档初稿写错了，已核实后改写）**：初稿写的"该字段在管理侧 `/laboratory/manage*` 需要回显给管理员"**不成立**。实测（HEAD `5341193`）：`/manage/*` 端点只存在于预约域——`ReservationBatchController:74` 与 `ReservationController:43`；实验室**没有任何管理端读端点**，`Laboratory` 实体只被 `LaboratoryController` 的公开读端点（`GET /{id}`、`GET /list`）返回。
+
+因此选 VO 的真实理由是：① 与仓库既有三套 VO 的「公开/内部字段隔离」模式一致；② **默认不外泄**——新增实体字段时 VO 不会自动带上，而 `@JsonIgnore` 是逐字段黑名单，会随实体演进而失效。`@JsonIgnore` 同样可用且少一个类，代价是它同时阻断请求体反序列化（`saveLaboratory` 会以当前登录者覆盖、`updateLaboratory` 会置 null，阻断无害）。二者都可接受，取 VO 以保持一致性并让"不外泄"成为默认。
+
+**不破坏既有断言（已核实）**：`LaboratoryOwnershipTest:222/223/237/238` 断言的是 `laboratoryService.getById(...)` 的**读库结果**，不是 HTTP 响应体，故改 VO 不会使它们变红——因此 F3 不提供"变红"型差别力证据，其验证只能到"响应体确实不含该字段"这一步，按 §3.13 第 11 条诚实登记。
 
 **登记**：这是接口面变更（响应体少一个字段），写入 README。
 
@@ -314,14 +322,29 @@
 
 **明确的取舍（必须登记）**：这把"每轮立即重试"改成"失败后按阈值间隔退避重试"（最坏 10 分钟一次）。这是**有意**的：进度保证优先于单行重试延迟。写入设计说明与 README。
 
-**新增测试**：构造 `n+1` 条陈旧行，其中**第 1 条（最旧）的补偿必然失败**（`@SpyBean` 让 `rollback` 对该 batchId 抛异常），断言 ①本轮 `failed=1` 且 ②该行 `fail_reason` 已写入 ③**下一轮 `listStale` 不再选中它**（即它已不在最前），而第 n+1 条能被处理到。这是本轮**唯一的新增行为级测试**，也是 F-C 修复的判别力证据。
+**同类缺陷的第二处（准备 T4 时新发现，初稿漏了）**：`reconcile` 的兄弟方法 `releasePendingQuotas`（同文件 `:149-172`）**结构完全相同**：
+
+```sql
+-- selectPendingQuotaReleases
+WHERE r.status = 'CANCELLED' AND r.quota_released = 0
+ORDER BY r.update_time ASC, r.id ASC
+LIMIT #{limit}
+```
+
+`catch` 同样只 `log.error`（`:166-169`）⇒ 队首行永久失败则恒占名额。**后果比第一处更严重**：`quota_released` 永远不置 1，那条已取消预约占的 Redis 名额**永久泄漏**，实验室显示有空位却约不上——是资源泄漏，不只是对账延迟。
+
+**为什么两处都要修**：同一个 `ORDER BY 时间列 ASC LIMIT n` + catch 不触库的写法，只在 `reconcile` 修掉等于留一半。**修法不能照抄**：`tb_reservation` **没有** `fail_reason` 列（实测列清单：`id/user_id/batch_id/create_time/update_time/status/quota_released/active_flag`），因此改用**显式 bump 既有的 `update_time`**（`LambdaUpdateWrapper.set(Reservation::getUpdateTime, now())`，WHERE 只按 id）。这不引入任何新列、新表、新脚本——按本文档自己在上一段立的取舍标准（"加列要 DDL = 新机械"），这是唯一不越线的选择。
+
+**新增测试**：构造 `n+1` 条陈旧行，其中**第 1 条（最旧）的补偿必然失败**（`@SpyBean` 让 `rollback` 对该 batchId 抛异常），断言 ①本轮 `failed=1` 且 ②该行 `fail_reason` 已写入 ③**下一轮 `listStale` 不再选中它**（即它已不在最前），而第 n+1 条能被处理到。这是本轮**唯一的新增行为级测试**，也是 F-C 修复的判别力证据。第二处（`releasePendingQuotas`）**同样要一条判别力用例**：让最旧的 CANCELLED 行 rollback 抛异常，断言它的 `update_time` 被推进、下一轮 `selectPendingQuotaReleases` 不再把它放在窗口首位。
+
+**诚实登记（副作用）**：`tb_reservation.update_time` 同时被 `ReservationVO` 作为 `updateTime` 返回给前端（`ReservationVO:42`），所以"补偿失败"会让该预约的"最后更新时间"看起来被刷新了一次。已确认**没有任何测试**断言该语义（`grep update_time src/test/` 仅命中两行注释），影响仅为可观测性上的轻微失真，登记于 README 已知边界。
 
 ### 3.10 [决策] 测试卫生
 
 | 项 | 处置 |
 |---|---|
 | `RedissonTest`、`HmDianPingApplicationTests` | 删（无断言） |
-| #22 P2-17：`EquipmentCacheTest` 靠语句 id 匹配 MyBatis 语句 | **加判据自证**：断言拦截器实际命中次数 > 0（否则"测试仍绿但不再测任何东西"）。这是"判据本身必须先自证"的直接落地 |
+| #22 P2-17：`EquipmentCacheTest` 靠语句 id 匹配 MyBatis 语句 | **无需改动——判据自证已经存在**。T2 的判别力实验实测：把 `:235` 的语句 id 改回 `com.hmdp.mapper.EquipmentMapper.selectById` 后，`shouldUseCacheAfterFirstDatabaseQueryAndCacheMissingEquipment:146` 立刻变红（`expected: <1> but was: <0>`）。该断言（`:146/:150/:154` 对 `equipmentSelectCounter.getCount()` 的断言）**本身就是**"拦截器实际命中次数 > 0"的判据自证：id 一失配计数恒为 0，测试就不可能还绿。故初稿列为待办是**误判**，已撤销 |
 | #17 P2-26：`ReservationBatchLifecycleTest.shouldIncludePublishedAndClosedBatchesOnPublicPage` 依赖"夹具在第 1 页" | 加固：像 Phase 6 的分页用例那样用 `equipmentId` 收窄查询，消除对库中累积数据的依赖 |
 | #27 P2-27：夹具手机号碰撞概率 | 加固：把随机空间从 `% 10_000_000L` 提到与 Phase 5 一致的 `% 100_000_000L`，并保持唯一性 |
 | #12 P2-12：`CacheClientMutexTest` T1 夹具复杂度 | **保留**。它 50 线程确定性构造了"并发未命中只回源一次"，是 Phase 4 P1-8 修复的**判别力证据本身**；简化会削弱证据强度。登记理由 |
