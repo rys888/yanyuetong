@@ -4,7 +4,7 @@ spring:
   profiles:
     active: local
   application:
-    name: hmdp
+    name: yanyuetong
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
@@ -38,15 +38,15 @@ spring:
         retry:
           enabled: false
 mybatis-plus:
-  type-aliases-package: com.hmdp.entity
+  type-aliases-package: com.yanyuetong.entity
   configuration:
     default-enum-type-handler: org.apache.ibatis.type.EnumTypeHandler
 logging:
   level:
-    com.hmdp: debug
+    com.yanyuetong: debug
   pattern:
     dateformat: mm:ss.SSS
-hmdp:
+yanyuetong:
   reservation:
     reconcile-interval-ms: 300000
     reconcile-threshold-ms: 600000

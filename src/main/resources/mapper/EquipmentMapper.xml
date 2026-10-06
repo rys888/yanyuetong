@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.hmdp.mapper.EquipmentMapper">
+<mapper namespace="com.yanyuetong.mapper.EquipmentMapper">
 
-    <select id="selectEquipmentPage" resultType="com.hmdp.vo.EquipmentVO">
+    <select id="selectEquipmentPage" resultType="com.yanyuetong.vo.EquipmentVO">
         SELECT e.id, e.laboratory_id, e.category_id, e.name, e.description, e.location, e.image,
                e.usage_requirement, e.status, e.booking_enabled, e.create_time, e.update_time,
                l.name AS laboratory_name, l.campus, l.building, l.room,
