@@ -415,8 +415,14 @@ LIMIT #{limit}
 ### 3.13 验收清单（Claude 侧执行，全部判据必须先自证）
 
 1. **编译/测试**：`mvn clean compile` 与 `mvn test` —— 记录 `Results:` 行与真实退出码（**不取管道退出码**）。
-2. **命名零残留**：`grep -rn 'com\.hmdp\|hm-dianping\|HmDianPing' src/ pom.xml` 计数 = 0；`grep -rn '"com\.hmdp' src/` = 0（字符串形式单独查）。
+2. **命名零残留**：`grep -rn 'com\.hmdp\|hm-dianping\|HmDianPing' src/ pom.xml` 计数 = 0；`grep -rn '"com\.hmdp' src/` = 0（字符串形式单独查）。**T4 前基线实测（HEAD `11ba413`）：A 旧包名 / B 旧坐标 / C 旧主类 / D `虎哥` / E `黑马|itheima` / F 字符串形式包名 —— 六项全部 0 命中；`hmdp` 唯一出现点是 `application.yaml:10` 的 JDBC URL 库名（白名单）。扫描器自证：120 个文件含 `com.yanyuetong`。**
 3. **§10.1 关键词**：对 `shop/voucher/seckill/blog/follow/dianping/geo/sign/bitmap/hyperloglog` 在**黑马语义**下逐个判定（先给出"应该为 0 的判据"，再用已知为"有"的样本自证判据有效）。
+
+   **T4 前基线实测（HEAD `11ba413`，扫描范围 `find src pom.xml`，自证：120 个文件含 `com.yanyuetong`）**：26 个关键词（`seckill/秒杀/voucher/优惠券/blog/探店/笔记/comment/评论/like/点赞/follow/关注/sign/签到/shop/商铺/geo/GEO/HyperLogLog/bitmap/Bitmap/feed/Feed/达人/热门`）在**词边界**匹配下全部 0 命中。
+
+   **但只靠 `-w` 会漏掉藏在标识符里的形式**（例如假想的 `tb_sign_record`），所以另做了一轮**无词边界**复核，逐个判定命中：`sign` 20 行（全是 `@Signature`(MyBatis 注解)、SQL 类型 `unsigned`、以及 DROP 脚本里的 `tb_sign`）、`like` 1 行（SQL 的 `LIKE` 运算符）、`shop` 3 行（全在 `phase10_drop_legacy_tables.sql` 里，即**必须**写出死表名的清理脚本）、`geo` 1 行（`shouldCountCasConflictAsSkippedAndConvergeOnNextRun` 里的 "Conver**ge**On" 大小写不敏感命中）、`comment` 75 行（SQL `COMMENT` 子句 + DROP 脚本的 `tb_blog_comments`）、`feed` 0 行。**全部为良性**，唯一"真的写了黑马域名"的地方是那份 DROP 脚本——它是功能性必要的（不写出表名就无法清理旧库），且 §3.1 已把 `tb_` 前缀与库名列为例外。
+
+   **待用户裁决的收口项**：DROP 执行完毕后，`phase10_drop_legacy_tables.sql` 是否从仓库删除。保留的理由是它是迁移链的一环（新装库不需要、旧库需要）；删除的理由是它是全仓最集中的一份黑马域名清单。**默认保留**，在 README 已知边界里说明它的用途与一次性性质。
 4. **禁改清单**：`reservation.lua`、`reservationRollback.lua`、`unlock.lua`、`ReservationLifecycleServiceImpl`、`ReservationPersistenceServiceImpl`、`ReservationQuotaRollbackExecutor`、`ReservationQuotaExecutor`、`ReservationRequestStatus`、`ReservationStatus`、`active_flag` DDL —— 用 `git status --porcelain -- <真实路径>` 核验（路径必须先 `find` 定位，不得凭记忆拼）。
 5. **凭据**：全仓库正则扫描（白名单 `change_me` / `your_password_here` / `${...}` / 占位符），命中数 = 0。**扫描必须先自证**（在已知存在的串上命中，如 `package com.yanyuetong` / `spring:`），**文件清单必须用 `find` 或 `git -c core.quotepath=false ls-files`**——默认 `git ls-files` 会把 3 个中文文件名转义成八进制，导致含真口令的那份报告被静默跳过、给出假通过的 0（见 §2.2 实测）。
 6. **README 章节**：15 节逐节核对存在且非空。
