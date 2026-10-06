@@ -231,7 +231,7 @@
 
 ### 2.6 已核实的环境事实（本轮实测）
 
-- 库 `hmdp` 现存 19 张表。**在用**：`tb_user`(1013) / `tb_equipment`(12) / `tb_equipment_category`(6) / `tb_laboratory`(4) / `tb_reservation*`(0)。**死表**：`tb_blog`(4) / `tb_shop`(14) / `tb_shop_type`(10) / `tb_voucher`(1) / `tb_blog_comments`(0) / `tb_follow`(0) / `tb_sign`(0) / `tb_seckill_voucher`(0) / `tb_voucher_order`(0) / `tb_user_info`(0)。
+- 库 `hmdp` 删前现存 **18 张**表（原文此处记 **19**，是其自身清单的计数笔误：下文在用 8 + 死表 10 = 18，与 `information_schema` 实测一致；已订正）。**在用**：`tb_user`(1013) / `tb_equipment`(12) / `tb_equipment_category`(6) / `tb_laboratory`(4) / `tb_reservation*`(0)。**死表**：`tb_blog`(4) / `tb_shop`(14) / `tb_shop_type`(10) / `tb_voucher`(1) / `tb_blog_comments`(0) / `tb_follow`(0) / `tb_sign`(0) / `tb_seckill_voucher`(0) / `tb_voucher_order`(0) / `tb_user_info`(0)。**2026-10-06 DROP 执行后现存 8 张**（仅在用表），实测见 §3.4 第 4 项。
 - `tb_reservation_request.update_time` 是 `ON UPDATE CURRENT_TIMESTAMP`（`phase8_consistency.sql:8`），且有 `idx_status_update_time` 复合索引 → F-C 的修复可复用现有能力（§3.9）。
 - `listStale` 的 `reconcile` 循环 catch 分支**只写日志、不触库**（`ReservationReconcileServiceImpl:135-139`）⇒ 持续失败的行 `update_time` 永不推进 ⇒ 饥饿成立。
 - 当前 git：`master` 领先 `origin/master` 15 个提交，工作区干净，HEAD = `b917535`。`origin` = `gitee.com/huyi612/hm-dianping.git`（他人课程仓库）；`github` = `git@github.com:rys888/yanyuetong.git`。
@@ -280,6 +280,8 @@
 2. **新增 `db/phase10_drop_legacy_tables.sql`**：对 10 张死表逐表 `DROP TABLE IF EXISTS`，每张表上方一行注释注明"原黑马表义 / 已无代码引用 / 行数（DROP 时点）"。幂等（`IF EXISTS`）。
 3. **`phase2_laboratory_equipment.sql` 种子 INSERT 幂等化**：改用 Phase 3 已确立的幂等写法（`ON DUPLICATE KEY UPDATE` 或 `INSERT ... SELECT ... WHERE NOT EXISTS`），与既有脚本风格一致。
 4. **执行 DROP 由我（Claude）直连执行**（用户 2026-10-06 裁决）。执行前：记录三张有数据表的行数作为证据；逐表确认无代码引用（`grep -rn` 表名 = 0）与外键依赖；执行后再查一次 `information_schema` 并核对在用表与种子数据未损。
+
+   **执行结果（2026-10-06，实测）**：用户在实时对话中逐表确认后执行。①**备份先行**：`mysqldump` 10 张表 → `~/Desktop/hmdp-legacy-10-tables-backup-2026-10-06.sql`（28,092 字节、10 张 `CREATE TABLE` + 4 张有数据表的 `INSERT`），落在**仓库之外**故不入库；②**删前** `information_schema` = 18 张，有数据的 4 张为 `tb_shop` 14 / `tb_shop_type` 10 / `tb_blog` 4 / `tb_voucher` 1（§2.6 原写"其余 7 张 0 行"同样漏计了有 10 行的 `tb_shop_type`，实为 6 张，已订正）；③**执行 + 幂等复跑**：`mysql hmdp < phase10_drop_legacy_tables.sql` 连跑两次均无报错；④**删后** `information_schema` = **8 张**，恰为在用表，10 张死表 0 命中；⑤**在用表未损**：逐表行数与删前完全一致（1013 / 4 / 6 / 12 / 0 / 0 / 0 / 0）；⑥**依赖检查**：132 个入库源码/配置/SQL 文件（排除 DROP 脚本自身）对 10 张表名 **0 处引用**，自证同范围 `tb_equipment` 命中 6 个文件（证明清单确被读到，不是空清单给出的假 0）；⑦**复跑终验**：`bash scripts/verify-acceptance.sh` → ALL CHECKS PASSED（exit 0）。
 
 ### 3.5 [决策] 凭据清理口径
 
@@ -488,7 +490,7 @@ LIMIT #{limit}
 
    **但只靠 `-w` 会漏掉藏在标识符里的形式**（例如假想的 `tb_sign_record`），所以另做了一轮**无词边界**复核，逐个判定命中：`sign` 20 行（全是 `@Signature`(MyBatis 注解)、SQL 类型 `unsigned`、以及 DROP 脚本里的 `tb_sign`）、`like` 1 行（SQL 的 `LIKE` 运算符）、`shop` 3 行（全在 `phase10_drop_legacy_tables.sql` 里，即**必须**写出死表名的清理脚本）、`geo` 1 行（`shouldCountCasConflictAsSkippedAndConvergeOnNextRun` 里的 "Conver**ge**On" 大小写不敏感命中）、`comment` 75 行（SQL `COMMENT` 子句 + DROP 脚本的 `tb_blog_comments`）、`feed` 0 行。**全部为良性**，唯一"真的写了黑马域名"的地方是那份 DROP 脚本——它是功能性必要的（不写出表名就无法清理旧库），且 §3.1 已把 `tb_` 前缀与库名列为例外。
 
-   **待用户裁决的收口项**：DROP 执行完毕后，`phase10_drop_legacy_tables.sql` 是否从仓库删除。保留的理由是它是迁移链的一环（新装库不需要、旧库需要）；删除的理由是它是全仓最集中的一份黑马域名清单。**默认保留**，在 README 已知边界里说明它的用途与一次性性质。
+   **收口项：已定 —— 保留该脚本**（2026-10-06）。DROP 已执行完毕，按上述"默认保留"落到保留：它是迁移链的一环（新装库不需要、从课程项目升级上来的旧库需要），且**删除它反而会让"旧库怎么清理"变成只有 git 历史才知道的事**——它是全仓库唯一一处集中记录这 10 张表名的地方，删掉不减少任何实际暴露（表名本身不是凭据，库里已无这些表）。仍保留"若将来要公开仓库可再议"的口子。
 
    **订正五（写脚本时才发现的记录缺陷，"全部 0 命中"不可复现）**：上面这段的**首句措辞是错的**。把判据写成脚本时实测：同一范围（`find src pom.xml`）、同样带词边界、但**大小写不敏感**时会命中 **10 处** —— `like` 1 处（`EquipmentMapper.xml:24` 的 SQL `LIKE` 运算符）+ 中文 9 处（**全部**在 `phase10_drop_legacy_tables.sql` 的表名注释里）。**这两类在记录基线时就已存在**：`git show 11ba413:...phase10_drop_legacy_tables.sql | grep -cE '秒杀|优惠券|探店|笔记|评论|关注|签到|商铺'` = **9**，`like` 在该提交的代码范围也是 **1**。之所以当初记成 0，是因为首句只写了"词边界"、没钉住"大小写敏感"以及"哪些命中算白名单"，而紧随其后的那段无边界复核**其实已经把 `like` 1 行 / `shop` 3 行 / `comment` 75 行逐条列出并判为良性** —— 两段合读才是完整结论，单读首句会得到一个假的 0。**教训与 §3.13 第 5 条的"自证期望值必须实测"同源：判据里没写死的范围，读者就会按自己的理解复现出不同结果。** 现已由 `scripts/verify-acceptance.sh` 把口径固定为"代码/配置范围恰好 1 处白名单（LIKE 语法）+ SQL 范围恰好 9 处且全在 DROP 脚本"，期望条数一旦变化就报红。
 4. **禁改清单**：`reservation.lua`、`reservationRollback.lua`、`unlock.lua`、`ReservationLifecycleServiceImpl`、`ReservationPersistenceServiceImpl`、`ReservationQuotaRollbackExecutor`、`ReservationQuotaExecutor`、`ReservationRequestStatus`、`ReservationStatus`、`active_flag` DDL —— 用 `git status --porcelain -- <真实路径>` 核验（路径必须先 `find` 定位，不得凭记忆拼）。
@@ -509,7 +511,9 @@ LIMIT #{limit}
    **T6 后复测（2026-10-06，实测）**：探测器①、③命中 **0**；探测器②仅剩 `guest/guest` 2 行（已判定为公开默认值，见 §2.2「订正二」），**凭据类命中 0**。扫描器自证 A = **3 个非 ASCII 路径**（`docs/plan/` 两份 + `docs/history/RabbitMQ-异步下单迁移交付报告.md`）——**改名后个数不变**（新文件名同样含中文），只是路径变了；自证 B = 121（159 候选口径；`src/ pom.xml` 口径为 120）；自证 C = 0。**教训：自证期望值必须实测后填写，不能按"改了 ASCII 名所以会减少"去推断**——我一度就是这么推断的，实测把它推翻了。
    **脚本化复核（`scripts/verify-acceptance.sh`，脚本实测）**：凭据扫描范围 **163** 个已入库文本文件（含 `docs/*.md`），自证 D = 范围内确存在 `password` 字样（探测器非恒假）；结构性探测器命中 **2 行，均为白名单 `guest`**，非白名单 0；字面量探测器默认不跑（脚本入库，不内嵌口令），**阴性对照**：`SCAN_SECRETS='guest'` 喂一个已知存在的串 → 正确报出 7 个文件命中，证明该探测器不是空转。**口径差异说明**：本脚本的 163 与上文基线的 159 不是同一清单——脚本按"全部已入库文本文件（含 `.md`/`.sh`/`.example`）"取范围，基线那次是 `find` 全量候选。两个数字都对，别当成矛盾。
 6. **README 章节**：15 节逐节核对存在且非空。
-7. **数据库**：死表已 DROP（`information_schema` 复核）；在用 4 表 + 种子数据（`tb_equipment` 12 / `tb_laboratory` 4）未损；`tb_user` 行数未变。
+7. **数据库**：死表已 DROP（`information_schema` 复核）—— ✅ **2026-10-06 实测通过**：删前 18 张（10 死 + 8 在用）→ 删后 **8 张**，恰为在用表，10 张死表在 `information_schema` 中 0 命中；脚本**连跑两次**验证幂等；在用表逐表行数与删前一致（`tb_user` 1013 / `tb_laboratory` 4 / `tb_equipment_category` 6 / `tb_equipment` 12 / 4 张预约表 0），种子数据未损；132 个入库源码/配置/SQL 文件对 10 张表名 **0 处引用**（自证同范围 `tb_equipment` 命中 6 个文件）。全过程见 §3.4 第 4 项。
+   
+   **记录口径说明**：本条原写作"死表已 DROP（`information_schema` 复核）"——那是**验收判据**的陈述，写完时并不可判（表还在），台账当时也如实标了"必须等 DROP 执行后"；直到 2026-10-06 才真正成立。此处因此补上**实测数字**，而不只留判据措辞：判据句读起来像"已完成"，是这类清单的固有歧义——**要分清"判据怎么写"与"是否已判过"**，这也是 §3.13 第 10 条教训的一个变体。
 8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 残留键 = 0；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
 
    **Redis 判据必须改正（实测：原判据是错的，会假通过）**：原写"Redis 无 `reservation*` / `lock:reservation*`"，但 `KEYS` 的模式是**前缀锚定**的——`KEYS 'reservation*'` 匹配不到 `icr:reservation:2026:10:06` 这类以 `icr:` 开头的键，会给出"干净"的假象。实测 db0（本应用，未配置 `database:` ⇒ 默认 db0）的真实状态：

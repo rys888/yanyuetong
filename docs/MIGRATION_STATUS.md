@@ -10,7 +10,8 @@
 本 Phase 交付：残留业务与死代码清除、包名与 Maven 坐标迁移至 `com.yanyuetong`、迁移链重建为编号脚本、
 P1/P2 行为修复、测试卫生核对、4 份根目录文档归置入 `docs/`、全仓凭据脱敏、README 15 节从零撰写。
 
-**一项未闭环**：10 张历史课程死表的 `DROP`（脚本已就绪，执行需用户在实时对话中逐表确认，见「Pending」）。
+**DB 层已闭环（2026-10-06）**：10 张历史课程死表已执行 `DROP`（用户逐表确认 → 备份 → 执行 → 幂等复跑 → `information_schema` 复核，详见「Pending」）。
+**剩余未闭环项均在仓库之外**：本机 RabbitMQ 2 个课程死队列、本机 Redis 3 个死域计数键（均需用户点名）、git 历史的明文口令（用户裁决不改写）、首次 push（用户裁决不做）。
 
 ## Passed
 
@@ -674,7 +675,7 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 |---|---|---|---|
 | T1 | 残留业务与死代码清除：`UploadController`、`UserInfo` 四件套、`GET /user/info/{id}` 与 `GET /user/{id}`、`SystemConstants` 两个死常量、`LoginFormDTO.password`、`SimpleRedisLock`/`ILock`/`PasswordEncoder`、11 处 `@author 虎哥`、2 个无断言测试 | `7743d47` | ✅ 符号 grep 全 0 |
 | T2 | 命名迁移：124 个 Java 文件的包名与目录、主类、pom 坐标、`application.yaml`、3 个 mapper XML namespace、2 处字符串形式包名 → `com.yanyuetong` | `2e94843` | ✅ `com.hmdp` / `hm-dianping` / `HmDianPing` grep 全 0 |
-| T3 | 迁移链重建为可安装的编号脚本；新增死表 DROP 脚本；`phase2` 种子 INSERT 幂等化 | `5341193` | ✅（DROP **未执行**，见「Pending」） |
+| T3 | 迁移链重建为可安装的编号脚本；新增死表 DROP 脚本；`phase2` 种子 INSERT 幂等化 | `5341193` | ✅（DROP 已于 2026-10-06 执行，8 张在用表未损，见「Pending」） |
 | T4 | P1/P2 行为修复：F4 实验室依赖检查、F3 `admin_user_id` 不外泄、F-C 对账饥饿（两处**显式**写 `update_time`）、P2-25 400/500 状态码、P2-22 发布失败文案拆分、`LOGIN_USER_TTL` → 30 分钟 | `7f3081f` | ✅ 54 例 0 失败；**V10–V12** 证明返工补齐了 V4/V5 的覆盖缺口 |
 | T5 | 测试卫生（原计划 #26 分页依赖、#27 手机号碰撞） | `207ed41`（仅文档） | ⚠️ **两项前提均被实测证伪，零代码改动**（W1/W2/W3 阴性对照 + 独立机制演示程序） |
 | T6 | 4 份根目录文档归置入 `docs/`、全仓凭据脱敏、README 15 节、本台账收口 | `2855310` | ✅ 凭据两条探测器命中 0 |
@@ -684,12 +685,13 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 经 W1 决定性反证（把两类后缀钉成同一常数后仍**全绿**）证明**当前不可达**。10 ms 周期这个数字本身为真，
 但"它能走到失败路径"为假——正确表述是**潜在地雷**：一旦引入 JUnit 并行执行或并发多进程共库跑测，它才会变成响亮失败。
 
-**Phase 10 的四处自我订正（如实登记，详见 `PHASE10-DESIGN.md`）**：
+**Phase 10 的五处自我订正（如实登记，详见 `PHASE10-DESIGN.md`）**：
 
 1. T4 派发的任务包里我把 `Result` 的字段名写成 `code`/`msg`，Codex 据 `Result.java` 反驳——**它是对的**（实为 `success` / `errorMsg` / `data` / `total`）。同类"凭记忆写名字"的错误本 Phase 共出现三次（另两次：T5 的假方法名、F4 的列清单）。
 2. T5 的两条隐患前提被**我自己的实验**双双证伪（见上），文档已按实测改写，未留下"已加固"的虚假记录。
 3. T5 撤销 Codex 改动时我用了 `git checkout --`，**连带丢弃了同文件里未暂存的 #26 加固**；因两项结论一致（均不需改动），未重新引入。教训已记入：复原变体改动必须用实验前的 `cp` 备份做 byte-exact 还原。
 4. 把 §3.13 的判据写成可复跑脚本时发现，**第 3 条记的"26 个关键词全部 0 命中"不可复现**：同一范围、同样带词边界、大小写不敏感时实测 10 处命中（SQL `LIKE` 1 处 + DROP 脚本中文表名注释 9 处），且**这两类在记录基线时就已存在**（`11ba413` 实测即为 1 与 9）。根因是首句只写了"词边界"、没钉住大小写与白名单，而紧邻的复核段其实已把这些命中和判定逐条列出——两段合读才对。
+5. 执行 DROP 时实测发现设计文档里**两处清单计数错误**（同一病根：数字靠肉眼清点清单得来，而非由实测计数产生）——`§2.6` 记"现存 19 张表"，而它自己列出的清单就是 18 张（在用 8 + 死表 10），`information_schema` 实测也是 18；`§3.4` 记"其余 7 张 0 行"，漏计了有 10 行的 `tb_shop_type`，实为 6 张。两处均已按实测订正。**教训与第 4 条同源**：清单类数字必须由 `COUNT(*)` / `wc -l` 产生；"顺手一数"在有 10 项以上时就会错，且错得很不显眼。
 
 **T6 收口审计发现并补上的台账缺口**（§3.13 第 10 条要求"三档逐条给结论与证据"，首轮 T6 提交后逐行核对才发现）：
 
@@ -716,11 +718,20 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 
 **代码与文档层面：无** —— Phase 10 T1–T6 已全部完成，P2 清单 30 行逐行有结论。
 
-两项未闭环（都在仓库之外，均需用户决定）：
+**数据库层面：已闭环（2026-10-06）** —— 10 张历史课程死表已按用户在实时对话中的逐表确认执行 `DROP`。全过程与实测数字：
 
-- **10 张历史课程死表的 `DROP` 尚未执行**。脚本 `src/main/resources/db/phase10_drop_legacy_tables.sql` 已就绪（`DROP TABLE IF EXISTS`，幂等可重复执行），
-  但它删除的是**本机 `hmdp` 库里的既有课程数据**（实测：`tb_shop` 14 行 / `tb_blog` 4 行 / `tb_voucher` 1 行，其余 7 张 0 行），**不可逆**。
-  需用户在实时对话中**逐表确认**后由 Claude 执行；执行前建议先备份。新装库不需要该脚本。
+| 步骤 | 实测 |
+|---|---|
+| 备份 | `~/Desktop/hmdp-legacy-10-tables-backup-2026-10-06.sql`，28,092 字节；含 10 张 `CREATE TABLE` + 4 张有数据表的 `INSERT`。放在**仓库之外**，不入库 |
+| 删前 | `information_schema` = **18 张**（10 死 + 8 在用）；有数据的 4 张：`tb_shop` 14 / `tb_shop_type` 10 / `tb_blog` 4 / `tb_voucher` 1，其余 6 张 0 行 |
+| 执行 | `mysql hmdp < src/main/resources/db/phase10_drop_legacy_tables.sql`，**随后复跑一次**验证幂等（两次均无报错） |
+| 删后 | **8 张**，恰为在用表；10 张死表在 `information_schema` 中 0 命中 |
+| 在用表未损 | `tb_user` 1013 / `tb_laboratory` 4 / `tb_equipment_category` 6 / `tb_equipment` 12 / 4 张预约表 0 —— 与删前逐表一致 |
+| 依赖检查 | 132 个入库源码/配置/SQL 文件（排除 DROP 脚本自身）对这 10 张表名 **0 处引用**；自证：同范围 `tb_equipment` 命中 6 个文件，证明清单确被读到 |
+| 复跑验收 | `bash scripts/verify-acceptance.sh` → **ALL CHECKS PASSED**（exit 0） |
+
+仍未闭环（都在仓库之外，均需用户在一次实时对话里点名后执行）：
+
 - **本机 RabbitMQ 上的 2 个课程死队列** `hello,queue1` / `hello,queue2`（各积压 1 条消息）**未删除**。
   仓库里已无引用，删不删都不影响本项目；删除属对 broker 的破坏性操作，等用户决定。
 - **本机 Redis 上 3 个已死域的计数键** `icr:order:2026:10:03` / `icr:order:2026:10:04` / `icr:order:2026:10:05`（均无 TTL）**未删除**。
@@ -825,7 +836,7 @@ Phase 0–9 的 Review / 设计文档中引用的旧路径按此表对应到新�
 8. ~~`UploadController` 的 `deleteBlogImg` / `/blog/delete` / `/blogs/` 语义残留~~ → ✅ **T1 关闭**（`UploadController` 整体删除，含 `MvcConfig` 白名单项）
 9. **点评式用户残留**：`tb_user_info`（0 行）、`UserInfo` 四件套、`GET /user/info/{id}`、`GET /user/{id}`
    —— 经用户 2026-10-04 裁决**归 Phase 10** → ✅ **T1 关闭**（`UserInfo` 四件套与 `GET /user/info/{id}`、`GET /user/{id}` 均已删）
-10. DB 三表 `tb_blog` / `tb_blog_comments` / `tb_follow` 未删（用户已确认"只删代码"）→ ✅ **T3 脚本就绪**（`phase10_drop_legacy_tables.sql` 覆盖 10 张死表，幂等性已实测）；**实际执行待用户逐表确认**，见「Pending」
+10. DB 三表 `tb_blog` / `tb_blog_comments` / `tb_follow` 未删（用户已确认"只删代码"）→ ✅ **T3 脚本就绪**（`phase10_drop_legacy_tables.sql` 覆盖 10 张死表，幂等性已实测）；✅ **2026-10-06 已执行**（10 张全部 DROP，`information_schema` 复核仅剩 8 张在用表、行数与删前一致）
 11. `EquipmentMapper.xml` 名称搜索前导通配符无法走 `idx_name`（当前 12 行无影响）
 12. `phase2_laboratory_equipment.sql` 种子数据 INSERT 不幂等（重复执行会主键冲突）；
     Phase 3 的脚本已改用幂等写法，Phase 2 的待回补 → ✅ **T3 关闭**（T6 在临时库实测：连跑两次无主键冲突、行数不变 4/6/12/2）
@@ -899,18 +910,21 @@ Phase 0–9 的 Review / 设计文档中引用的旧路径按此表对应到新�
 ## Last Review
 
 Phase 10 Review — PASS — 2026-10-06，详见 `docs/refactor/PHASE10-DESIGN.md` §3.13
-（T1–T6 逐项验收：命名零残留、26 个黑马语义关键词 0 命中、凭据两条探测器命中 0、README 15 节齐备、
+（T1–T6 逐项验收：命名零残留、黑马语义关键词**代码/配置范围恰 1 处白名单 + SQL 范围恰 9 处且全在 DROP 脚本**、
+凭据两条探测器命中 0、README 15 节齐备、
 禁改清单 porcelain 全空；判别力证据 V1–V12 + W1–W3 共 15 组变体实验，全部 byte-exact 复原。
+**注意**：此处原写"26 个黑马语义关键词 0 命中"，该结论**不可复现**，已按实测改写（见 `PHASE10-DESIGN.md` §3.1 订正五
+与上页「Phase 10 的五处自我订正」第 4 条）；判据现由 `scripts/verify-acceptance.sh` 钉住期望条数，一旦变化即报红。）
 **诚实登记的强度缺口**：`LOGIN_USER_TTL` 常量（V8 阴性对照证明无行为可测）、P2-22 分支二 CAS 拒绝
 （无可确定性构造的注入点）、F4 的 `@Transactional`（无行为差异）——三项无变体强度证据，不冒充已验证。
 **§3.13 第 10 条（P0/P1/P2 三档逐条结论）已在 T6 后的收口审计中补齐**：P2 全部 30 行逐行有结论，
 其中 6 行原本只有过程记录（5 行缺关闭标记、3 行停在"Phase 10 评估"），本轮补结论或补标记；
 核对中新发现第 30 条（broker 侧课程死队列）。**这次遗漏本身就是证据**：文档层面的"已安排"不等于"已完成"。
-**第 7/8 条的实测状态**：只读部分已验 —— `information_schema` 确认 18 张表（10 张死表**仍在**，8 张在用）、
-在用表 4 张 0 行、Redis 6 个 key 全为 `icr:*`（无 `reservation:*` 残留）、
-`reservation.create.queue` 与 `.dlq` 均 `messages=0`、DLQ 无死信；
-"死表是否消失"这一条**必须等 DROP 执行后**才能判。
-**待用户确认后执行的动作**：10 张历史课程死表 DROP；另可一并清理 2 个课程死队列。）
+**第 7/8 条已全部可判（DROP 后复查）**：`information_schema` 现为 **8 张表**，恰为在用表 —— 10 张死表**已消失**，
+第 7 条（"死表已 DROP"）**据此判定为已满足**；在用表逐表行数与删前一致（`tb_user` 1013 / `tb_laboratory` 4 /
+`tb_equipment_category` 6 / `tb_equipment` 12 / 4 张预约表 0）；132 个入库源码/配置/SQL 文件对这 10 张表名 **0 处引用**。
+第 8 条只读部分（Redis 6 个 key 全为 `icr:*`、两个预约队列 `messages=0`、DLQ 无死信）DROP 前后均无变化。
+**仍未做**：2 个课程死队列的清理（用户未点名，见「Pending」）。）
 
 
 Phase 8 Review — PASS — 2026-10-05，详见 `docs/refactor/PHASE8-REVIEW.md`
