@@ -397,7 +397,7 @@ Phase 1 只做编译验证，可以不碰配置。但 Phase 2 的验收标准包
 | B1 | **JDBC 驱动太旧** | `pom.xml` 用 `mysql:mysql-connector-java:5.1.47`；服务端是 **MySQL 9.7.1** | 5.1.x 不支持 `caching_sha2_password`，**必然连不上**，应用起不来 |
 | B2 | Redis 指向不可达地址 | `application.yaml` 指向 `192.168.150.101:6379` 且密码不符 | 登录 Session 不可用，所有需登录接口直接失败 |
 | B3 | RabbitMQ 账号不符 | 配置 `guest/guest`，与本机实际账号不符 | 队列声明失败、控制台刷错误日志 |
-| B4 | **凭据明文入库** | `application.yaml` `password: 123`；`RedissonConfig.java` 硬编码 IP + 密码 | 一旦 push 到 GitHub 即公开泄露 |
+| B4 | **凭据明文入库** | `application.yaml` 的 `password` 为**明文课程演示口令**（值已按 Phase 10 §3.13 第 5 条脱敏）；`RedissonConfig.java` 硬编码 IP + 密码 | 一旦 push 到 GitHub 即公开泄露 |
 
 ### 8.2 建议方案（推荐，需用户批准）
 

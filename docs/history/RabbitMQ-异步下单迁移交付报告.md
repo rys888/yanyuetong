@@ -1,4 +1,8 @@
-# 秒杀消息队列迁移 RabbitMQ —— 交付报告
+# RabbitMQ 异步下单迁移 —— 交付报告（历史归档）
+
+> **历史归档说明**：本文记录 2026-10-03 把「优惠券秒杀」异步下单链路从 Redis Stream 迁移到 RabbitMQ 的完整过程。
+> Phase 10 已按重构要求**永久删除**秒杀/优惠券业务域，本文描述的业务代码**已不在仓库中**；
+> 保留本文仅作为「消息可靠性设计」迁移过程的过程证据。**文中口令字面量已脱敏。**
 
 > 日期：2026-10-03
 > 项目：黑马点评 hm-dianping（Maven + Java 8，Spring Boot 2.3.12.RELEASE）
@@ -9,7 +13,7 @@
 ## 0. 开头假设
 
 - RabbitMQ 按默认 `localhost:5672`、`guest/guest`、`virtual-host /` 配置，需要先用 Docker 启动（见第 6 节）。
-- 项目里 MySQL/Redis 配置与本机不一致（本机密码 123456），属于既有配置，本次未改动；RabbitMQ 配置为全新追加。
+- 项目里 MySQL/Redis 配置与本机不一致（本机口令见本地配置，**不入库**），属于既有配置，本次未改动；RabbitMQ 配置为全新追加。
 - 消费端「处理失败 → 死信」链路通过反编译 Spring AMQP 2.2.18 字节码核对确认（手动 ack 下默认 recoverer 不会真正 nack、会卡死消费者，故改为监听器显式 basicNack，并在容器级用 `ConditionalRejectingErrorHandler(rejectManual=true)` 兜住反序列化失败），运行时行为需按第 7 节实测。
 
 ---

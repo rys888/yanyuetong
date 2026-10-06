@@ -4,6 +4,8 @@
 > 记录时的 Git HEAD：`433cdfb feat(seckill): 秒杀异步下单迁移至 RabbitMQ`
 > 分支：`master`
 > 本阶段未修改任何业务代码。
+> **Phase 10 脱敏说明（2026-10-06）**：本文是 Phase 0 的原始基线记录，其中出现的课程演示口令字面量
+> 已按 Phase 10 §3.13 第 5 条**替换为等义描述**（值已从仓库清除）。原始记录里的「哪个口令被拒绝」这类**结论**完整保留，只删除值本身。
 
 ---
 
@@ -59,8 +61,8 @@ JAVA_HOME=$JAVA8 mvn clean compile -DskipTests
 
 | 服务 | 项目配置指向 | 实测结果 | 结论 |
 | --- | --- | --- | --- |
-| MySQL | `127.0.0.1:3306/hmdp`，`root/123` | 端口可连接；`root/123` **Access denied**；`root` 空密码亦 denied | ⚠️ **凭据不匹配，需人工确认** |
-| Redis | `192.168.150.101:6379`，密码 `123321` | **不可连接**（该内网地址在本机不可达）；本机 `127.0.0.1:6379` 可连接，但需认证且 `123321` 不正确 | ⚠️ **地址与密码均需修正** |
+| MySQL | `127.0.0.1:3306/hmdp`，`root` + 课程演示口令（值已脱敏） | 端口可连接；该口令 **Access denied**；`root` 空密码亦 denied | ⚠️ **凭据不匹配，需人工确认** |
+| Redis | `192.168.150.101:6379`，课程演示口令（值已脱敏） | **不可连接**（该内网地址在本机不可达）；本机 `127.0.0.1:6379` 可连接，但需认证且该口令不正确 | ⚠️ **地址与密码均需修正** |
 | RabbitMQ | `localhost:5672`，`guest/guest` | 端口可连接（Docker 容器 `rabbitmq:4-management`，已运行 25h，healthy，映射 5672/15672） | ✅ AMQP 可达 |
 | RabbitMQ 管理 API | `localhost:15672` | `guest:guest` 返回 `401 not_authorized` | ⚠️ 无法用配置中的账号查询管理 API |
 
@@ -99,7 +101,7 @@ JAVA_HOME=$JAVA8 mvn clean compile -DskipTests
 
 ### 3.3 数据库凭据
 
-`root/123` 与 `root` 空密码均被拒绝，**本机 MySQL 的真实凭据未知**，
+`root` + 课程演示口令（值已脱敏）与 `root` 空密码均被拒绝，**本机 MySQL 的真实凭据未知**，
 因此本次无法导出「运行时实际库」的 `SHOW CREATE TABLE` 结果。
 上表基于项目自带 SQL 导出文件，与代码中的实体映射一致，可作为基线。
 如需实测库结构，请提供本机 MySQL 凭据。
@@ -223,7 +225,7 @@ Producer **同步阻塞等待 Confirm 最多 5 秒**。这削弱了「异步削�
 | 6 | DLQ 无处理机制 | `RabbitMQConfig` 只声明队列，全仓库无 DLQ 消费者/查询/重放代码 | ✅ 属实 |
 | 7 | Redisson 被当成防重复主要手段 | `:117` `lock:order:{userId}` + `:135` count 查询构成唯一防线 | ✅ 属实 |
 | 8 | 登录没有完成 logout | `UserController:60-64` 返回 `Result.fail("功能未完成")` | ✅ 属实 |
-| 9 | 配置存在明文密码 | `application.yaml` MySQL `password: 123`、Redis `password: 123321`；`RedissonConfig:16` 硬编码 IP+密码 | ✅ 属实 |
+| 9 | 配置存在明文密码 | `application.yaml` MySQL 与 Redis 两处 `password` 均为**明文课程演示口令**（值已脱敏）；`RedissonConfig:16` 硬编码 IP+密码 | ✅ 属实 |
 | 10 | 固定 Windows 图片上传目录 | `SystemConstants:4` `"D:\\lesson\\nginx-1.18.0\\html\\hmdp\\imgs\\"` | ✅ 属实 |
 
 ### 额外发现的基线问题（供后续 Phase 参考）
@@ -244,10 +246,10 @@ Producer **同步阻塞等待 Confirm 最多 5 秒**。这削弱了「异步削�
 
 以下三项无法由代码分析解决，需要用户提供信息或授权：
 
-1. **本机 MySQL 凭据**：`root/123` 与空密码均被拒绝。需要真实账号密码，
+1. **本机 MySQL 凭据**：`root` + 课程演示口令（值已脱敏）与空密码均被拒绝。需要真实账号密码，
    否则无法验证真实库结构、无法运行集成测试、无法验证 Phase 8 的唯一索引是否生效。
 2. **Redis 连接信息**：项目配置指向 `192.168.150.101:6379`（不可达），
-   本机 `127.0.0.1:6379` 需认证但 `123321` 不正确。需要正确的密码，
+   本机 `127.0.0.1:6379` 需认证但配置里的课程演示口令（值已脱敏）不正确。需要正确的密码，
    或授权把配置改为本机地址。
 3. **RabbitMQ 管理账号**：`guest/guest` 无法访问管理 API（AMQP 5672 可达）。
    若需要查询/重放 DLQ，需要可用的管理账号。

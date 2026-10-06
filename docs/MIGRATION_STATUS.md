@@ -1,11 +1,16 @@
 # Migration Status
 
-> 黑马点评 → 高校实验资源预约平台 分阶段重构进度
+> 黑马点评 → 高校实验资源预约平台（**研约通 / yanyuetong**）分阶段重构进度台账
 
 ## Current Phase
 
-Phase 8 — Consistency & Reliability（**T1–T8 全部完成**；**阶段六/七 跨 Task Review PASS**，详见 `docs/refactor/PHASE8-REVIEW.md`；
-全量 **136 run / 0 failures / 0 errors**；**设计与台账的数项「本设计直接裁定」尚未经用户逐条确认**；**Phase 8 本地提交见下**）
+**Phase 10 — Final Cleanup & Delivery —— PROJECT MIGRATION COMPLETE（T1–T6 全部完成）**
+
+设计与验收台账：`docs/refactor/PHASE10-DESIGN.md`；用户可读总览：根目录 `README.md`。
+本 Phase 交付：残留业务与死代码清除、包名与 Maven 坐标迁移至 `com.yanyuetong`、迁移链重建为编号脚本、
+P1/P2 行为修复、测试卫生核对、4 份根目录文档归置入 `docs/`、全仓凭据脱敏、README 15 节从零撰写。
+
+**一项未闭环**：10 张历史课程死表的 `DROP`（脚本已就绪，执行需用户在实时对话中逐表确认，见「Pending」）。
 
 ## Passed
 
@@ -18,6 +23,8 @@ Phase 8 — Consistency & Reliability（**T1–T8 全部完成**；**阶段六/�
 - Phase 6 — Redis + Lua Reservation ✅（Review PASS，详见 `docs/refactor/PHASE6-REVIEW.md`）
 - Phase 7 — RabbitMQ Reservation ✅（Review PASS，详见 `docs/refactor/PHASE7-REVIEW.md`；本地提交 `02daa19`）
 - Phase 8 — Consistency & Reliability ✅（Review PASS，详见 `docs/refactor/PHASE8-REVIEW.md`；本地提交 `ede414b`）
+- Phase 9 — Cancellation & Fulfillment ✅（Review PASS，详见 `docs/refactor/PHASE9-REVIEW.md`；本地提交 `b917535`）
+- Phase 10 — Final Cleanup & Delivery ✅（详见 `docs/refactor/PHASE10-DESIGN.md`；T1–T6 提交见下）
 
 ## Current Work
 
@@ -654,10 +661,59 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
     故提速的正解是**改判据**（改查台账行或 `rabbitTemplate.receive()`），而非缩短轮询间隔。
     已登记为 Phase 10 可选优化（会动到刚验收的 `ReservationMqTest`，本 Phase 不动）
 
+### Phase 9（已完成）— 本地提交 `b917535`「feat: add reservation cancellation and fulfillment lifecycle」
+
+- [x] 预约取消（`cancel`）与履约核销（`verify`）生命周期；引入 `ReservationStatus`（RESERVED / CANCELLED / COMPLETED / NO_SHOW）与 `active_flag` 条件更新
+- [x] 关闭 Phase 8 Review 登记的 **F-D**（`DUPLICATE` 被误置终态致账实不符）与 **F-B**（`@EnableScheduling` 无 `initialDelay`，测试上下文启动即跑对账）
+- [x] Review **PASS**（首轮 REWORK REQUIRED，返工后通过）：全量 **154 run / 0 failures / 0 errors**；V1–V5 判别力实验全部 PASS、5 次复原 **byte-exact**；禁改清单 13/13 未改
+- 详见 `docs/refactor/PHASE9-DESIGN.md` / `PHASE9-REVIEW.md`
+
+### Phase 10（已完成，T1–T6）
+
+| Task | 内容 | 本地提交 | 结果 |
+|---|---|---|---|
+| T1 | 残留业务与死代码清除：`UploadController`、`UserInfo` 四件套、`GET /user/info/{id}` 与 `GET /user/{id}`、`SystemConstants` 两个死常量、`LoginFormDTO.password`、`SimpleRedisLock`/`ILock`/`PasswordEncoder`、11 处 `@author 虎哥`、2 个无断言测试 | `7743d47` | ✅ 符号 grep 全 0 |
+| T2 | 命名迁移：124 个 Java 文件的包名与目录、主类、pom 坐标、`application.yaml`、3 个 mapper XML namespace、2 处字符串形式包名 → `com.yanyuetong` | `2e94843` | ✅ `com.hmdp` / `hm-dianping` / `HmDianPing` grep 全 0 |
+| T3 | 迁移链重建为可安装的编号脚本；新增死表 DROP 脚本；`phase2` 种子 INSERT 幂等化 | `5341193` | ✅（DROP **未执行**，见「Pending」） |
+| T4 | P1/P2 行为修复：F4 实验室依赖检查、F3 `admin_user_id` 不外泄、F-C 对账饥饿（两处**显式**写 `update_time`）、P2-25 400/500 状态码、P2-22 发布失败文案拆分、`LOGIN_USER_TTL` → 30 分钟 | `7f3081f` | ✅ 54 例 0 失败；**V10–V12** 证明返工补齐了 V4/V5 的覆盖缺口 |
+| T5 | 测试卫生（原计划 #26 分页依赖、#27 手机号碰撞） | `207ed41`（仅文档） | ⚠️ **两项前提均被实测证伪，零代码改动**（W1/W2/W3 阴性对照 + 独立机制演示程序） |
+| T6 | 4 份根目录文档归置入 `docs/`、全仓凭据脱敏、README 15 节、本台账收口 | 本文件所在提交 | ✅ 凭据两条探测器命中 0 |
+
+**T5 的结论必须按实测理解，不要按初稿读**：`#26`（分页用例隐含依赖"夹具落在第 1 页"）经 W3 阴性对照证明**本就确定**
+（`ORDER BY b.id DESC` + 被断言的两行恰好 id 最大 + `assertFalse` 由 WHERE 兜住）；`#27`（手机号夹具 10 ms 周期导致跨类撞号）
+经 W1 决定性反证（把两类后缀钉成同一常数后仍**全绿**）证明**当前不可达**。10 ms 周期这个数字本身为真，
+但"它能走到失败路径"为假——正确表述是**潜在地雷**：一旦引入 JUnit 并行执行或并发多进程共库跑测，它才会变成响亮失败。
+
+**Phase 10 的三处自我订正（如实登记，详见 `PHASE10-DESIGN.md`）**：
+
+1. T4 派发的任务包里我把 `Result` 的字段名写成 `code`/`msg`，Codex 据 `Result.java` 反驳——**它是对的**（实为 `success` / `errorMsg` / `data` / `total`）。同类"凭记忆写名字"的错误本 Phase 共出现三次（另两次：T5 的假方法名、F4 的列清单）。
+2. T5 的两条隐患前提被**我自己的实验**双双证伪（见上），文档已按实测改写，未留下"已加固"的虚假记录。
+3. T5 撤销 Codex 改动时我用了 `git checkout --`，**连带丢弃了同文件里未暂存的 #26 加固**；因两项结论一致（均不需改动），未重新引入。教训已记入：复原变体改动必须用实验前的 `cp` 备份做 byte-exact 还原。
+
 ## Pending
 
-- Phase 9 Cancellation & Fulfillment
-- Phase 10 Final Cleanup（含凭据外置入库 + 文档明文凭据清理 + 首次 push）
+**代码与文档层面：无** —— Phase 10 T1–T6 已全部完成。
+
+唯一未闭环项：
+
+- **10 张历史课程死表的 `DROP` 尚未执行**。脚本 `src/main/resources/db/phase10_drop_legacy_tables.sql` 已就绪（`DROP TABLE IF EXISTS`，幂等可重复执行），
+  但它删除的是**本机 `hmdp` 库里的既有课程数据**（`tb_shop` 14 行 / `tb_blog` 4 行 / `tb_voucher` 1 行等），**不可逆**。
+  需用户在实时对话中**逐表确认**后由 Claude 执行；执行前建议先备份。新装库不需要该脚本。
+- **git 历史中的明文口令未改写**（用户裁决：只清工作区、不动历史）。当前工作区已全部脱敏，
+  但**本仓库在公开前必须先改写历史或轮换口令**。仓库未推送到任何公开远端。
+- **首次 push 未做**（用户裁决：只本地提交）。注意 `origin` 指向他人课程仓库，`github` 指向用户自有仓库，**不要执行裸 `git push`**。
+
+## 文档路径迁移（Phase 10 T6）
+
+Phase 0–9 的 Review / 设计文档中引用的旧路径按此表对应到新位置。**历史文档本身未改写**——它们记录的是当时的状态，
+改写会让台账失去可追溯性；本表即为其索引。
+
+| 旧路径（根目录） | 新路径 |
+|---|---|
+| `实验资源预约平台-分阶段重构Phase计划.md` | `docs/plan/实验资源预约平台-分阶段重构Phase计划.md` |
+| `黑马点评 → 实验资源预约平台重构.md` | `docs/plan/原始需求-实验资源预约平台重构.md`（**已改名**，文件头注明原名） |
+| `秒杀消息队列迁移RabbitMQ-交付报告.md` | `docs/history/RabbitMQ-异步下单迁移交付报告.md`（**已改名** + 口令脱敏） |
+| `MIGRATION_STATUS.md` | `docs/MIGRATION_STATUS.md`（即本文件） |
 
 ## Known Issues
 
@@ -718,33 +774,33 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 9. ~~**LAB_ADMIN 无实验室归属约束**：任何 LAB_ADMIN 可管理任意实验室与设备（计划 §6 称"管理自己负责的实验室"）~~
    → **已于 Phase 5.1 修复**（见「已解决」）
 10. **Session TTL 过长**：`LOGIN_USER_TTL = 36000` 分钟 ≈ 25 天，且每次请求续期、无绝对上限。
-    既有配置非本阶段引入，登记为待决项 → Phase 10 决定是否缩短
+    既有配置非本阶段引入，登记为待决项 → ✅ **T4 关闭**：`LOGIN_USER_TTL = 30L`（**单位是分钟**，故 30 = 30 分钟；不是 1800L）。活跃用户无感（每请求续期），token 泄漏后的可用窗口由 25 天压到 30 分钟。**诚实登记**：全仓测试无任何断言涉及登录 token TTL，本项**无变体强度证据**（V8 阴性对照证明常量无语义可测），只经"常量值 + 两处调用点单位"人工核对
 11. **F-C（Phase 8 Review 发现）**：`listStale` 的 `LIMIT` **无游标推进** —— 长期失败的行 `update_time` 恒最旧，
     会**每轮独占 200 个名额**，使其后达到阈值的陈旧行饥饿。Phase 8 追加的 `request_id` 次键只让选取
-    **可复现**，**不解决饥饿** → Phase 9/10。详见 `PHASE8-REVIEW.md` §6 F-C
+    **可复现**，**不解决饥饿** → ✅ **T4 关闭（两处）**：① 对账 catch 里 `recordFailReason` **显式** `SET update_time = now()`，让失败行退出陈旧窗口；② 回滚补偿 catch 里显式 bump `update_time`（**不能写回原值**，否则 `ON UPDATE CURRENT_TIMESTAMP` 不生效、等价于没写）。V10 实测：去掉显式赋值后**恰好 1 例红**（`shouldAdvanceUpdateTimeWhenSameReconcileFailureRepeats`），证明判别力。详见 `PHASE8-REVIEW.md` §6 F-C
 12. **F-D（Phase 8 Review 发现）**：`ReservationMessageConsumer` 把 `DUPLICATE` 与 `PERSISTED` 同样走
     `markConfirmedSafely`，而 `DUPLICATE` 的判定条件是 **(userId,batchId) 已有行**、**并非** `reservationId` 已有行
     → 该 `requestId` 被置为终态 `CONFIRMED`，库里却没有 `id = reservationId` 的行。正常提交路径被 Redis `SADD`
     挡住而不可达，**但 DLQ 重放路径可达**（`replay` 第 4 步只按 `reservationId` 查是否已落库）。
-    Phase 9 的取消/履约要按 `requestId` 找预约行，会放大该不一致 → Phase 9。详见 `PHASE8-REVIEW.md` §6 F-D
+    Phase 9 的取消/履约要按 `requestId` 找预约行，会放大该不一致 → ✅ **Phase 9 关闭**（详见 `docs/refactor/PHASE9-REVIEW.md`；判别力证据 V3/V4/V5）。详见 `PHASE8-REVIEW.md` §6 F-D
 
 ### P2（清理项）
 
 1. ~~Redis Key 重复定义（Java 常量 vs Lua 字面量）~~ → **已于 Phase 6 关闭**：`reservation.lua` 全部经 `KEYS[]` 寻址，无字面量 key
 2. ~~`seckill:stock:` / `seckill:order:` 无 TTL~~ → **已随 Phase 5.0 删除而消失**（Phase 6 全树核查确认零残留）
 3. ~~四套历史秒杀实现以注释形式残留~~ → **已随 Phase 5.0 删除而消失**（`src/` 树中 `秒杀`/`seckill`/`voucher` 仅剩保留的建库脚本 `db/hmdp.sql`）
-4. `SystemConstants.IMAGE_UPLOAD_DIR` 硬编码 Windows 路径
-5. `SystemConstants.MAX_PAGE_SIZE` 已无引用（死常量）
-6. 明文密码（`application.yaml` 已占位 `change_me`，真实凭据在 gitignored 的 `application-local.yaml`）
+4. ~~`SystemConstants.IMAGE_UPLOAD_DIR` 硬编码 Windows 路径~~ → ✅ **T1 关闭**（常量与全部引用已删）
+5. ~~`SystemConstants.MAX_PAGE_SIZE` 已无引用（死常量）~~ → ✅ **T1 关闭**
+6. ~~明文密码（`application.yaml` 已占位 `change_me`，真实凭据在 gitignored 的 `application-local.yaml`）~~ → ✅ **T6 关闭（工作区）**；git 历史未改写，见「Pending」
 7. `秒杀消息队列迁移RabbitMQ-交付报告.md:12` 含明文本机密码（**历史遗留，已在提交 `433cdfb` 中**，改工作区无法消除）
-   → push 前必须改写历史或轮换凭据
-8. `UploadController` 的 `deleteBlogImg` / `/blog/delete` / `/blogs/` 语义残留 → Phase 10
+   → ✅ **T6 关闭（工作区）**：该文件已改名并脱敏为 `docs/history/RabbitMQ-异步下单迁移交付报告.md`（`:12` 改为「见本地配置，不入库」）。**git 历史未改写**，push 前仍须改写历史或轮换凭据
+8. ~~`UploadController` 的 `deleteBlogImg` / `/blog/delete` / `/blogs/` 语义残留~~ → ✅ **T1 关闭**（`UploadController` 整体删除，含 `MvcConfig` 白名单项）
 9. **点评式用户残留**：`tb_user_info`（0 行）、`UserInfo` 四件套、`GET /user/info/{id}`、`GET /user/{id}`
-   —— 经用户 2026-10-04 裁决**归 Phase 10** → Phase 10
-10. DB 三表 `tb_blog` / `tb_blog_comments` / `tb_follow` 未删（用户已确认"只删代码"）
+   —— 经用户 2026-10-04 裁决**归 Phase 10** → ✅ **T1 关闭**（`UserInfo` 四件套与 `GET /user/info/{id}`、`GET /user/{id}` 均已删）
+10. DB 三表 `tb_blog` / `tb_blog_comments` / `tb_follow` 未删（用户已确认"只删代码"）→ ✅ **T3 脚本就绪**（`phase10_drop_legacy_tables.sql` 覆盖 10 张死表，幂等性已实测）；**实际执行待用户逐表确认**，见「Pending」
 11. `EquipmentMapper.xml` 名称搜索前导通配符无法走 `idx_name`（当前 12 行无影响）
 12. `phase2_laboratory_equipment.sql` 种子数据 INSERT 不幂等（重复执行会主键冲突）；
-    Phase 3 的脚本已改用幂等写法，Phase 2 的待回补
+    Phase 3 的脚本已改用幂等写法，Phase 2 的待回补 → ✅ **T3 关闭**（T6 在临时库实测：连跑两次无主键冲突、行数不变 4/6/12/2）
 13. `tb_user.password` 从未被使用（密码登录未实现）；种子管理员 `13900000001` 无密码，只能验证码登录
 14. `RoleInterceptor` 类级注解分支当前无使用者（按设计保留）；403 响应体为空系有意选择
 15. `CacheClientMutexTest` 的 T1 夹具过度复杂（`spy` + 线程改名 + `doAnswer` 忙等 + 用 `"{}"` 规避 Hutool
@@ -763,7 +819,7 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 21. **F4**：`DELETE /laboratory/{id}` **不检查是否存在依赖设备/批次**。这是 Phase 2 遗留的既有缺口，
     Phase 5 的批次表让后果更实（删实验室会留下孤儿批次）→ 待决（属 Phase 2 契约变更）
 22. **可观测性**：`publish` 的 `SET NX` 拒绝分支与条件 UPDATE 的 CAS 拒绝分支**复用同一句报错文案**
-    「批次状态已变化，发布失败」，排障时无法区分是哪一层拦下的（实测 7 个失败方全部报同一句）→ Phase 10
+    「批次状态已变化，发布失败」，排障时无法区分是哪一层拦下的（实测 7 个失败方全部报同一句）→ ✅ **T4 关闭**：拆成「发布占用标记已存在，疑似重复发布」与「批次状态已被并发修改，发布失败」两句（错误类型仍为 `BadRequestException` / 400）
 23. 设计文档 §9 的 H 编号在 Phase 5 期间扩到 H12；`PHASE5-DESIGN.md` §10 T9 原写的判别实验
     （"去掉 `WHERE status='DRAFT'` → 必须失败"）**是错的**，已更正（串行路径根本走不到那条 UPDATE）→ 已修文档
 24. `ReservationBatchLifecycleTest` 的并发用例依赖**时序**（错开释放扫描）；正确实现下恒绿，但判别力是概率性的
@@ -771,16 +827,16 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
 25. **全局异常兜底的 HTTP 状态码**：`WebExceptionAdvice.handleRuntimeException` 未声明 `@ResponseStatus`，
     因此服务器故障返回 **HTTP 200** + `Result.fail("服务器异常")`；且 `HttpMessageNotReadableException`
     这类**客户端**错误也落到同一兜底。属跨切面契约（正确做法应区分 400/500），Phase 6 已更正设计文档措辞
-    但未改代码 → Phase 10
+    但未改代码 → ✅ **T4 关闭**：五处处理器齐备（400 / 403 / 503 / 500 / 400），并由**行为级** `MockMvc` 用例钉住（V11/V12 证明判别力）
 26. `ReservationBatchLifecycleTest.shouldIncludePublishedAndClosedBatchesOnPublicPage` 隐含依赖
     「夹具落在第 1 页」（`DEFAULT_PAGE_SIZE = 5` + `ORDER BY b.id DESC`）；库里公开批次累积后会环境相关地变红。
-    Phase 6 新增的分页用例已改用 `equipmentId` 收窄查询消除该依赖，Phase 5 的这条待同样加固 → Phase 10
+    Phase 6 新增的分页用例已改用 `equipmentId` 收窄查询消除该依赖，Phase 5 的这条待同样加固 → ⚠️ **T5 结论：前提证伪，不改**（`ORDER BY b.id DESC` + 被断言的两行恰好 id 最大 + `assertFalse` 由 WHERE 兜住，该用例本就确定；W3 阴性对照去掉过滤后仍 21/21 全绿）。**另注**：本条此前记的方法名 `shouldIncludePublishedAndClosedBatchesOnPublicPage` 实测不存在，真实名是 `shouldOnlyReturnPublishedAndClosedBatchesOnPublicPage`
 27. **测试夹具手机号碰撞概率**：夹具用 `% 10_000_000L` 生成后缀，对 `tb_user.phone` 的唯一索引
     （`uniqe_key_phone`）存在约 1e-5 量级的生日碰撞概率（Phase 5 用 `% 100_000_000L`，空间大 10 倍）。
-    当前实测未命中，登记为已知概率性风险，不阻塞
+    当前实测未命中，登记为已知概率性风险，不阻塞 → ⚠️ **T5 结论：机制证伪，撤销**。10 ms 周期这个数字本身为真（独立机制演示程序实测：旧表达式在 200 个"相差 10 ms 整数倍"的时刻 **200/200 撞号**、首个重复点 `10_000_000 ns`；毫秒版 **0/200**、重复点 `10_000_000 ms`），但**它在当前执行模型下不可达**：三个类都在 `@AfterEach` 删用户，Surefire 实测**单 fork 顺序执行**（四类 wall-clock 57.118 s ≈ 各类之和 55.6 s，无任何并行配置）；决定性反证 W1——把两个类的后缀**钉成同一常数**后仍**全绿**。正确表述是**潜在地雷**：一旦引入 JUnit 并行执行或并发多进程共库跑测才会变响亮失败
 28. **中断 Spring 集成测试会留下夹具残留**：中途 kill 测试进程时正在执行的用例 `@AfterEach` 不跑，
     会留下实验室/设备/用户/批次各一行（Phase 6 实测残留一组，已清理）。
-    收尾动作应包含一次 DB 残留检查，而不是只看 `mvn` 退出码 → 纳入 Phase 10 的收尾清单
+    收尾动作应包含一次 DB 残留检查，而不是只看 `mvn` 退出码 → ✅ 已纳入 Phase 10 终验清单（§3.13 第 7/8 条）
 29. **F-B（Phase 8 Review 发现）**：`SchedulingConfig` 的 `@EnableScheduling` **无 profile 守卫**，
     且 `ReservationReconcileServiceImpl` 的 `@Scheduled(fixedDelayString = ...)` **没有 `initialDelay`**
     → 每个 `@SpringBootTest` 上下文**启动即跑一次对账**（后台线程）。今日无害（夹具要么新鲜、要么已终态），
@@ -788,6 +844,14 @@ Phase 7 已做掉（本 Phase 只复核），真缺口是 8.5 + 8.6 + 8.7 + 8.8 
     修法：加 `initialDelay`，或把 `@EnableScheduling` 收进 profile → Phase 9。详见 `PHASE8-REVIEW.md` §6 F-B
 
 ## Last Review
+
+Phase 10 Review — PASS — 2026-10-06，详见 `docs/refactor/PHASE10-DESIGN.md` §3.13
+（T1–T6 逐项验收：命名零残留、26 个黑马语义关键词 0 命中、凭据两条探测器命中 0、README 15 节齐备、
+禁改清单 porcelain 全空；判别力证据 V1–V12 + W1–W3 共 15 组变体实验，全部 byte-exact 复原。
+**诚实登记的强度缺口**：`LOGIN_USER_TTL` 常量（V8 阴性对照证明无行为可测）、P2-22 分支二 CAS 拒绝
+（无可确定性构造的注入点）、F4 的 `@Transactional`（无行为差异）——三项无变体强度证据，不冒充已验证。
+**待用户确认后执行的唯一剩余动作**：10 张历史课程死表 DROP。）
+
 
 Phase 8 Review — PASS — 2026-10-05，详见 `docs/refactor/PHASE8-REVIEW.md`
 （跨 T1–T8 独立复查：R1–R11 逐条裁定并按证据强度分档（变体 6 / 读码-grep 4 / 无证据 1），

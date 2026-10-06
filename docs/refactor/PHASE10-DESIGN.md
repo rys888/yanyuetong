@@ -114,18 +114,24 @@
 
 ### 2.2 凭据盘点（实测）
 
-**工作区（HEAD，跟踪文件）**——4 处，分布在 3 个文件：
+**工作区（HEAD，跟踪文件）——T6 前实测：4 个已入库文件 / 8 处**（本节所有值均已按 §3.13 第 5 条脱敏，只留位置与性质）：
 
-| 位置 | 形态 | 性质 |
-|---|---|---|
-| `docs/refactor/PHASE0-BASELINE.md:226` | 问题清单第 9 条的**证据**里抄了 `password: 123` 与 `password: 123321` | **课程时代**的演示口令，非本机当前口令 |
-| `docs/refactor/PHASE2-DESIGN.md:400` | 安全审计表 B4 行抄了 `password: 123` | 同上 |
-| `秒杀消息队列迁移RabbitMQ-交付报告.md:12` | 叙述句里直接写了**本机当前** MySQL/Redis 口令字面量 | **真凭据** |
-| `秒杀消息队列迁移RabbitMQ-交付报告.md:78` | 贴出的 `application.yaml` 片段里的 `password:` 赋值 | 配置片段里的口令字面量 |
+| 位置（T6 前） | 形态 | 性质 | T6 处置 |
+|---|---|---|---|
+| `秒杀消息队列迁移RabbitMQ-交付报告.md:12` | 叙述句里直接写了**本机当前** MySQL/Redis 口令字面量 | **真凭据** | ✅ 已改为「见本地配置，不入库」 |
+| `docs/refactor/PHASE0-BASELINE.md:62`、`:102`、`:247` | `root` + 课程演示口令的写法（各 1–2 次） | 课程时代旧值 | ✅ 已改为「值已脱敏」 |
+| `docs/refactor/PHASE0-BASELINE.md:63`、`:250` | Redis 课程演示口令 | 课程时代旧值 | ✅ 同上 |
+| `docs/refactor/PHASE0-BASELINE.md:226` | 问题清单第 9 条的**证据**里抄了两处口令赋值 | 课程时代旧值 | ✅ 同上 |
+| `docs/refactor/PHASE2-DESIGN.md:400` | 安全审计表 B4 行抄了一处口令赋值 | 课程时代旧值 | ✅ 同上 |
+| 本文件 `:121`/`:122`/`:124`/`:126`/`:475`/`:480`/`:481` | **我自己的审计注记逐字复述了上述值** | 自我引入的残留 | ✅ 已改为只留行号与性质、不复述值 |
 
-**更正初稿的两处措辞**：① 本机**当前**口令只出现在那份交付报告里（`:12`）；`PHASE0-BASELINE.md` / `PHASE2-DESIGN.md` 抄的是**课程原配置**的 `123`/`123321`，虽然同样该清，但性质是"历史审计证据里的旧值"而非"本机口令"。② `application.yaml` 里三个口令早已是 `change_me` 占位、`.example` 模板是 `your_password_here`——这两个是白名单，**不属于待清项**。
+**订正一（初稿低估）**：初稿记「4 处，分布在 3 个文件」，实测是 **4 个已入库文件**——多出的 `PHASE2-DESIGN.md:400` 只有靠"认结构不认值"的探测才能捕获（见 §3.13 第 5 条），纯字面量正则会漏。另加**本文件自身**的 7 处复述。
 
-**扫描方法的坑（必须写进任务包，否则终验会假通过）**：本仓库有 **3 个非 ASCII 文件名**（`实验资源预约平台-分阶段重构Phase计划.md`、`秒杀消息队列迁移RabbitMQ-交付报告.md`、`黑马点评 → 实验资源预约平台重构.md`），而 `git ls-files` 在默认 `core.quotepath=true` 下把它们输出成八进制转义形式（如 `"\347\247\222\346\235\200..."`），**驱动器直接拿这个列表去 grep，文件会打不开而被静默跳过**——实测 `git ls-files | grep -E '\.md$'` 驱动的扫描漏掉了那份交付报告（恰好是含真口令的那份）。所以扫描文件清单必须用 `find`、或 `git -c core.quotepath=false ls-files`，并且**扫描器必须先自证**（在一个已知存在的串上命中，例如 `spring:`）才允许采信它的 0 命中结论。
+**订正二（初稿高估：`guest/guest` 不脱敏）**：初稿把交付报告里的 `guest/guest`（`:78` 的 yaml 片段、`:443`/`:446` 的 docker 启动命令与管理台提示）也列入待清项，T6 实测后**撤回该判定**：① 它是 **RabbitMQ 官方文档公开的出厂默认账号**，不含任何秘密，脱敏不增加安全性；② 实测在本机**不可用**（`PHASE0-BASELINE` 记录管理 API 返回 `401 not_authorized`），本机真实账号是另一套，它不构成"可用凭据"；③ 全仓另有 `PHASE0-BASELINE.md:62/65/252` 与 `PHASE2-DESIGN.md:399` 写着同一串，只清一处会造成"清过了"的假象而其余照旧。**判定：公开默认值，不是凭据，不动。**
+
+**白名单**：`application.yaml` 三处已是 `change_me` 占位、`.example` 模板是 `your_password_here`；`src/main/resources/application-local.yaml`（真实值）由 `.gitignore:37` 忽略且 `git ls-files` 确认未跟踪——均**不属于待清项**。
+
+**扫描方法的坑（必须写进任务包，否则终验会假通过）**：本仓库有 **3 个非 ASCII 文件名**（`docs/plan/实验资源预约平台-分阶段重构Phase计划.md`、`docs/history/RabbitMQ-异步下单迁移交付报告.md`、`docs/plan/原始需求-实验资源预约平台重构.md`——T6 改名后**路径变了但个数仍是 3**，因为新名 `RabbitMQ-异步下单迁移交付报告.md` 本身也含中文），而 `git ls-files` 在默认 `core.quotepath=true` 下把它们输出成八进制转义形式（如 `"\347\247\222\346\235\200..."`），**驱动器直接拿这个列表去 grep，文件会打不开而被静默跳过**——实测 `git ls-files | grep -E '\.md$'` 驱动的扫描漏掉了那份交付报告（恰好是含真口令的那份）。所以扫描文件清单必须用 `find`、或 `git -c core.quotepath=false ls-files`，并且**扫描器必须先自证**（在一个已知存在的串上命中，例如 `spring:`）才允许采信它的 0 命中结论。
 
 **配置本身已达标**：`application.yaml` 三处口令均为 `change_me` 占位；`spring.profiles.active: local`；真值在 `src/main/resources/application-local.yaml`，该文件 **未跟踪**且被 `.gitignore` 覆盖（`git ls-files` 计数 = 0，已验），仓库内只有 `.example` 模板。`RedissonConfig` 已改为 `@Value` 注入，无硬编码 IP/口令（Phase 2 已完成）。
 
@@ -444,6 +450,16 @@ LIMIT #{limit}
 
 **证据现状（诚实登记）**：全仓测试**没有**任何一处断言这两句文案（`grep` 命中的只是夹具名称里恰好含"预约发布失败"字样，`ReservationPublishFailureTest` 整类讲的是**提交预约**的失败补偿，与批次发布无关）。分支一（SET NX 拒绝）可以**确定性**构造：调用 `publish` 之前手动在 Redis 写入 `reservation:batch:quota:{id}`，即必然走到该分支——要求补一条断言新文案的用例。分支二（CAS 拒绝）需要"读之后、CAS 之前"改变库中状态，构造更绕，**若无法确定性构造就如实说明并登记为无证据**，不得为凑证据写不确定的用例。
 
+**T6 执行结果（实测，2026-10-06）**：
+
+| 交付物 | 结果 |
+|---|---|
+| 4 份根目录文档归置 | ✅ `git mv` 保留历史：`docs/plan/实验资源预约平台-分阶段重构Phase计划.md`、`docs/plan/原始需求-实验资源预约平台重构.md`（改名+文件头注明原名）、`docs/history/RabbitMQ-异步下单迁移交付报告.md`（改名+脱敏+加「历史归档」说明）、`docs/MIGRATION_STATUS.md` |
+| 根目录形态 | ✅ 只剩 `README.md` / `pom.xml` / `src/` / `docs/` / `.gitignore` / `.claude/`（+ 构建产物 `target/`） |
+| README 15 节 | ✅ `grep -c '^## ' README.md` = **15**，逐节非空 |
+| 凭据脱敏 | ✅ 四处文件按上文处置；两条探测器重跑命中 **0**（`guest/guest` 2 行为已判定的公开默认值） |
+| 历史文档的可追溯性 | ✅ Phase 0–9 的 Review/设计文档**未改写**（它们记录当时状态），改为在 `docs/MIGRATION_STATUS.md` 维护「文档路径迁移对照表」做索引 |
+
 ### 3.12 [决策] 明确"不做"并登记为已知边界
 
 | 项 | 结论与理由 |
@@ -471,17 +487,19 @@ LIMIT #{limit}
 4. **禁改清单**：`reservation.lua`、`reservationRollback.lua`、`unlock.lua`、`ReservationLifecycleServiceImpl`、`ReservationPersistenceServiceImpl`、`ReservationQuotaRollbackExecutor`、`ReservationQuotaExecutor`、`ReservationRequestStatus`、`ReservationStatus`、`active_flag` DDL —— 用 `git status --porcelain -- <真实路径>` 核验（路径必须先 `find` 定位，不得凭记忆拼）。
 5. **凭据**：全仓库正则扫描（白名单 `change_me` / `your_password_here` / `${...}` / 占位符），命中数 = 0。**扫描必须先自证**（在已知存在的串上命中，如 `package com.yanyuetong` / `spring:`），**文件清单必须用 `find` 或 `git -c core.quotepath=false ls-files`**——默认 `git ls-files` 会把 3 个中文文件名转义成八进制，导致含真口令的那份报告被静默跳过、给出假通过的 0（见 §2.2 实测）。
 
-   **基线实测（2026-10-06，扫描器已跑通并三项目证）**：`/tmp/p10-cred-scan.sh`，候选文件 159 个（`find` 生成清单、NUL 分隔），自证 A = 清单含 3 个非 ASCII 路径（正是 `git ls-files` 会漏掉的那批：`./实验资源预约平台-分阶段重构Phase计划.md`、`./秒杀消息队列迁移RabbitMQ-交付报告.md`、`./黑马点评 → 实验资源预约平台重构.md`）；自证 B = 含 `com.yanyuetong` 的文件 **121** 个（>100，扫描器确实在工作）；自证 C = 用不存在串扫描命中 **0**。
-   **`123456|123321` 命中 9 行 / 4 个文件**。但正则扫描**不完整**，必须补一条"认结构不认值"的探测（`(pass(word|wd)?|pwd)["']?[:=]` 后接非占位值），否则漏掉 `password: 123` 这类值——**实测该探测抓到了正则漏掉的 `PHASE2-DESIGN.md:400`**。
-   **待清项（4 个已入库文件，共 7 处 + 1 类弱项）**：
-   | 文件 | 位置 | 性质 |
-   |---|---|---|
-   | `秒杀消息队列迁移RabbitMQ-交付报告.md` | `:12`（本机**当前** MySQL/Redis 口令）、`:78` 与 `:443`（`guest/guest`，RabbitMQ 出厂默认） | 真凭据 + 弱默认值 |
-   | `docs/refactor/PHASE0-BASELINE.md` | `:63`、`:226`、`:250` | 课程时代旧值 `123321` |
-   | `docs/refactor/PHASE2-DESIGN.md` | `:400` | 课程时代旧值 `password: 123`（**仅结构探测可捕获**） |
-   | `docs/refactor/PHASE10-DESIGN.md` | `:121`、`:122`、`:126` | **我自己的审计注记逐字引用了上述值**——自我引入的残留，T6 必须一并消除（改为只留行号、不复述值） |
-   **白名单（不在待清项内）**：`src/main/resources/application-local.yaml:3/5/8`——已由 `.gitignore:37` 忽略且 `git ls-files` 确认未跟踪；`application.yaml` 三处已是 `change_me` 占位。**订正**：本文档此前记"3 个文件 4 处"，实测为 **4 个已入库文件**（多出 `PHASE2-DESIGN.md:400`）外加 `PHASE10-DESIGN.md` 自身的引用。
-   **扫描器自身踩过的两个坑（写下来，避免 T6 重犯）**：① 清单用换行分隔却传给 `xargs -0`，整个文件被当成**一个**超长文件名，`grep` 把 `File name too long` 写到 stderr 而 stdout 为空 ⇒ **看起来像"命中 0"的假通过**；两端分隔符必须统一为 NUL，且**绝不 `2>/dev/null`**。② macOS/BSD `xargs` 没有 `-a` 参数；macOS bash 3.2 没有 `mapfile`。
+   **T6 前基线实测（2026-10-06，扫描器三项自证）**：`/tmp/p10-cred-scan.sh`，候选文件 159 个（`find` 生成清单、NUL 分隔），自证 A = 清单含 **3** 个非 ASCII 路径（正是 `git ls-files` 在默认 `core.quotepath` 下会转义、因而被静默跳过的那批）；自证 B = 含 `com.yanyuetong` 的文件 **121** 个（>100，扫描器确实在工作；**注意口径**：这是扫描器的 159 个候选文件——含 `docs/*.md`——的全量口径，与第 2 条自证里的 **120** 个不是同一范围，后者只扫 `src/ pom.xml`。两个数字都对，别当成矛盾）；自证 C = 用不存在串扫描命中 **0**。
+   **基线命中 = 4 个已入库文件 / 8 处**。**扫描器由两条并行探测器取并集，缺一不可**：① 字面量正则 `\b123456\b|\b123321\b`（`\b` 是必需的——否则会把 `1234567` 这个手机号后缀常数误报成口令）；② "认结构不认值"的探测（`(pass(word|wd)?|pwd)` 后接非占位值）+ `root/<数字>`、`密码/口令` 后接数字。**实测探测器②抓到了探测器①漏掉的 `PHASE2-DESIGN.md:400`（短口令）。**
+   **T6 处置结果（逐处，值一律不复述）**：
+
+   | 文件（T6 后路径） | T6 前位置 | 性质 | 处置 |
+   |---|---|---|---|
+   | `docs/history/RabbitMQ-异步下单迁移交付报告.md`（旧路径在根目录） | `:12` | **本机当前** MySQL/Redis 口令 | ✅ 改为「见本地配置，不入库」 |
+   | 同上 | `:78`、`:443`、`:446` | `guest/guest`（RabbitMQ 出厂默认） | ⏸ **判定为公开默认值，不脱敏**（见 §2.2「订正二」） |
+   | `docs/refactor/PHASE0-BASELINE.md` | `:62`、`:63`、`:102`、`:226`、`:247`、`:250` | 课程时代旧值 | ✅ 6 处全部改为等义描述（结论保留、值删除） |
+   | `docs/refactor/PHASE2-DESIGN.md` | `:400` | 课程时代旧值（**仅探测器②可捕获**） | ✅ 已改为等义描述 |
+   | `docs/refactor/PHASE10-DESIGN.md` | §2.2 表 + 本节 | **我自己的审计注记逐字复述**——自我引入 | ✅ 已改为只留行号与性质、不复述值 |
+   **白名单（不在待清项内）**：`src/main/resources/application-local.yaml:3/5/8`——已由 `.gitignore:37` 忽略且 `git ls-files` 确认未跟踪；`application.yaml` 三处已是 `change_me` 占位、`.example` 模板是 `your_password_here`。**订正**：本文档此前记"3 个文件 4 处"，实测为 **4 个已入库文件**外加本文件自身的复述。
+   **T6 后复测（2026-10-06，实测）**：探测器①、③命中 **0**；探测器②仅剩 `guest/guest` 2 行（已判定为公开默认值，见 §2.2「订正二」），**凭据类命中 0**。扫描器自证 A = **3 个非 ASCII 路径**（`docs/plan/` 两份 + `docs/history/RabbitMQ-异步下单迁移交付报告.md`）——**改名后个数不变**（新文件名同样含中文），只是路径变了；自证 B = 121（159 候选口径；`src/ pom.xml` 口径为 120）；自证 C = 0。**教训：自证期望值必须实测后填写，不能按"改了 ASCII 名所以会减少"去推断**——我一度就是这么推断的，实测把它推翻了。
 6. **README 章节**：15 节逐节核对存在且非空。
 7. **数据库**：死表已 DROP（`information_schema` 复核）；在用 4 表 + 种子数据（`tb_equipment` 12 / `tb_laboratory` 4）未损；`tb_user` 行数未变。
 8. **运行环境残留**（#28）：4 张预约表 0 行；Redis 残留键 = 0；RabbitMQ `reservation.create.queue` 与 `.dlq` 均 `messages=0 consumers=0`。
@@ -563,6 +581,7 @@ LIMIT #{limit}
 - **Constraints**：**不改包名**（T2 做）；不动 `CacheClient`、`RedisData`、`RedisIdWorker`、`User.password`；不动任何 Lua 与 reservation 域代码。
 - **Acceptance**：`mvn clean compile` 通过；全量测试通过（用例数应减少 2 个类）；`UserController` 不再持有 `IUserInfoService`；`grep -rn "IMAGE_UPLOAD_DIR\|MAX_PAGE_SIZE\|UserInfo\|虎哥\|SimpleRedisLock\|PasswordEncoder" src/` = 0。
 - **Validation**：`mvn clean test`；给出删除文件清单与用例数变化。
+- **执行结果（实测，T6 复核）**：本地提交 `7743d47`，**20 个文件变更、其中 10 个文件被删除**——`UploadController`、`UserInfo`、`UserInfoMapper`、`IUserInfoService`、`UserInfoServiceImpl`、`ILock`、`PasswordEncoder`、`SimpleRedisLock`、`HmDianPingApplicationTests`、`RedissonTest`（后两个即"无断言测试"）。T6 复核命令 `grep -rn 'IMAGE_UPLOAD_DIR\|MAX_PAGE_SIZE\|UserInfo\|虎哥\|SimpleRedisLock\|PasswordEncoder\|UploadController' src/` → **0 命中**。
 
 ### T2 — 命名迁移（依赖 T1）
 
@@ -570,6 +589,7 @@ LIMIT #{limit}
 - **Constraints**：库名 `hmdp` 保持；`tb_` 前缀保持；不改任何业务逻辑；不改 Lua；`@author 虎哥` 已由 T1 删除。
 - **Acceptance**：`grep -rn 'com\.hmdp\|hm-dianping\|HmDianPing' src/ pom.xml` = **0**；`grep -rn '"com\.hmdp' src/` = **0**；`mvn clean compile` 通过；全量测试通过；测试里的语句 id 字符串已同步（**必须显式报告这一处**，因为它编译不报错）。
 - **Validation**：两条 grep 计数 + `mvn clean test`。
+- **执行结果（实测，T6 复核）**：本地提交 `2e94843`，**120 个文件变更**（124 个 Java 文件的包目录重命名 + 主类 + `pom.xml` 坐标 + `application.yaml` + 3 个 mapper XML namespace + 2 处字符串形式包名）。T6 复核：`grep -rn 'com\.hmdp\|hm-dianping\|HmDianPing' src/ pom.xml` → **0 命中**；`grep -rn '"com\.hmdp' src/` → **0 命中**；主类 `com.yanyuetong.YanYueTongApplication`，Maven 坐标 `yanyuetong`。
 
 ### T3 — 数据库脚本（可与 T2 并行）
 
@@ -577,6 +597,12 @@ LIMIT #{limit}
 - **Constraints**：不得改动任何**在用表**（`tb_user` 的 DDL 原样搬运，除文件位置外不改一个字符）；不得 DROP 在用表；不改 Phase 3/5/7/8/9 脚本。
 - **Acceptance**：baseline 脚本可单独在空库执行成功（在临时库实测后删除）；DROP 脚本对不存在的表重复执行不报错；幂等种子脚本**连跑两次**不产生主键冲突且行数不变。
 - **Validation**：在临时库上实跑（执行后即删临时库），报告每步输出。
+- **执行结果（实测）**：本地提交 `5341193`，**4 个文件变更**：`hmdp.sql` 删除 → `phase0_baseline.sql`（仅 `tb_user` 的 DDL）；新增 `phase10_drop_legacy_tables.sql`（10 张死表幂等 DROP、逐表注释行数）；`phase2_laboratory_equipment.sql` 幂等化。
+- **T6 补测（2026-10-06，设计文档此前未留 T3 的实测记录，故补做）**：在临时库 `hmdp_p10_idem` 上执行，**测后即删库，全程未触碰 `hmdp`**（已复核 `SHOW DATABASES LIKE 'hmdp%'` 只剩 `hmdp`）：
+  1. 8 个脚本按 `phase0 → 2 → 3 → 5_lab_ownership → 5_reservation_batch → 7 → 8 → 9` 顺序在**空库全部执行成功**（8/8 OK）；
+  2. `phase2` **连跑两次**均 OK，**无主键冲突，且行数不变**：`tb_laboratory` 4 / `tb_equipment_category` 6 / `tb_equipment` 12 / `tb_user` 2；
+  3. DROP 脚本在「表不存在」场景**连跑两次均不报错**（幂等成立）。
+  附注：新装库的 `tb_user` 只有 **2 行**（`phase3` + `phase5` 各自种入的 `LAB_ADMIN`）——这佐证了终验对 `tb_user` 的判据必须是"**行数未变**"而非"0 行"。
 
 ### T4 — P1/P2 行为修复（与 T2/T3 并行）
 
@@ -604,6 +630,9 @@ LIMIT #{limit}
 ### T6 — 文档（Claude 自己做，不派发）
 
 §3.11 的文档归置、README 15 节、`MIGRATION_STATUS.md` 收口。**不交 Codex**：文档属 Control Plane 职责，且涉及对全项目设计意图的复述，转述会失真。
+- **执行结果（实测）**：4 份根目录文档已 `git mv` 归置（2 份改名）；`README.md` 从零撰写、15 节齐备；`docs/MIGRATION_STATUS.md` 收口为 **PROJECT MIGRATION COMPLETE**（新增 Phase 9/10 条目、P1/P2 逐行闭合标注、「文档路径迁移对照表」、「Pending」只剩死表 DROP 与 git 历史两项）；凭据脱敏后两条探测器命中 0。
+- **一处自我订正（如实登记）**：我一度推断"交付报告改成 ASCII 名后，扫描器自证的非 ASCII 路径数会从 3 降到 2"，**实测推翻了它**——新名 `RabbitMQ-异步下单迁移交付报告.md` 本身仍含中文，个数仍是 **3**。教训：**自证期望值必须实测后填写，不能按直觉推断**。
+- **顺带补做了 T3 的实测记录**：设计文档此前只有 T1/T4/T5 的执行结果，T1/T2/T3 缺记录，T6 一并补齐（T3 的临时库三项验收为**本次补测**，测后即删库）。
 
 ---
 
