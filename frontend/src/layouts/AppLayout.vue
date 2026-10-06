@@ -11,7 +11,7 @@
           class="header-menu"
           mode="horizontal"
           router
-          :default-active="route.path"
+          :default-active="activeMenu"
           :ellipsis="false"
         >
           <el-menu-item v-for="item in menuItems" :key="item.path" :index="item.path">
@@ -78,6 +78,16 @@ const menuItems = computed(() =>
     )
     .sort((left, right) => left.meta.menu.order - right.meta.menu.order)
     .map((record) => ({ path: record.path, ...record.meta.menu })),
+)
+
+const activeMenu = computed(
+  () =>
+    [...menuItems.value]
+      .sort((left, right) => right.path.length - left.path.length)
+      .find(
+        (item) =>
+          route.path === item.path || route.path.startsWith(`${item.path}/`),
+      )?.path ?? route.path,
 )
 
 const avatarText = computed(() => userStore.profile?.nickName?.trim().charAt(0) || '研')
