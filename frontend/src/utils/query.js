@@ -43,3 +43,32 @@ export function hasActiveFilter(params) {
     (key) => params?.[key] !== '' && params?.[key] !== undefined && params?.[key] !== null,
   )
 }
+
+// 学生端可见的批次状态子集，镜像后端 ReservationBatchServiceImpl.queryBatchPage 的闸门
+// （非 PUBLISHED/CLOSED 直接 400）与 ReservationBatchMapper.xml 的 publicOnly 条件。
+export const BATCH_PUBLIC_STATUSES = ['PUBLISHED', 'CLOSED']
+
+export function buildBatchQuery(query) {
+  const laboratoryId = query?.laboratoryId
+  const equipmentId = query?.equipmentId
+  const status = query?.status
+
+  return stripEmpty({
+    current: normalizeCurrent(query?.current),
+    laboratoryId:
+      laboratoryId != null && isNumericId(String(laboratoryId))
+        ? String(laboratoryId)
+        : undefined,
+    equipmentId:
+      equipmentId != null && isNumericId(String(equipmentId))
+        ? String(equipmentId)
+        : undefined,
+    status: BATCH_PUBLIC_STATUSES.includes(status) ? status : undefined,
+  })
+}
+
+export function hasActiveBatchFilter(params) {
+  return ['laboratoryId', 'equipmentId', 'status'].some(
+    (key) => params?.[key] !== '' && params?.[key] !== undefined && params?.[key] !== null,
+  )
+}
