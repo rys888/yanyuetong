@@ -16,6 +16,10 @@ export function fetchReservationPage(params) {
   return request({ method: 'get', url: '/reservation/page', params })
 }
 
+export function cancelReservation(id) {
+  return request({ method: 'post', url: `/reservation/${id}/cancel` })
+}
+
 export function classifySubmitFailure(result) {
   if (result.kind === 'ok') {
     return null

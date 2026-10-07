@@ -7,6 +7,8 @@ import axios from 'axios'
 import { createPinia, setActivePinia } from 'pinia'
 import { createServer as createViteServer } from 'vite'
 
+import { ENUM_VALUES } from '../src/constants/enums.js'
+import { routes } from '../src/router/routes.js'
 import * as queryModule from '../src/utils/query.js'
 
 process.env.NO_PROXY = '*'
@@ -14,6 +16,13 @@ process.env.no_proxy = '*'
 
 const FRONTEND_ROOT = fileURLToPath(new URL('../', import.meta.url))
 const RESERVATION_API_PATH = fileURLToPath(new URL('../src/api/reservation.js', import.meta.url))
+const QUERY_PATH = fileURLToPath(new URL('../src/utils/query.js', import.meta.url))
+const RESERVATION_LIST_PATH = fileURLToPath(
+  new URL('../src/views/reservation/ReservationListView.vue', import.meta.url),
+)
+const RESERVATION_DETAIL_PATH = fileURLToPath(
+  new URL('../src/views/reservation/ReservationDetailView.vue', import.meta.url),
+)
 const BATCH_DETAIL_PATH = fileURLToPath(
   new URL('../src/views/batch/BatchDetailView.vue', import.meta.url),
 )
@@ -101,6 +110,14 @@ function createFixtureServer(capturedRequests) {
       return
     }
 
+    if (
+      request.method === 'POST' &&
+      url.pathname === `/reservation/${RESERVATION_ID}/cancel`
+    ) {
+      sendJson(response, 200, '{"success":true}')
+      return
+    }
+
     sendJson(response, 404, '{"status":404,"error":"Not Found"}')
   })
 }
@@ -128,6 +145,11 @@ function createFixtureAdapter(capturedRequests) {
       data = `{"success":true,"data":{"id":${RESERVATION_ID},"status":"RESERVED"}}`
     } else if (config.method === 'get' && config.url === '/reservation/page') {
       data = '{"success":true,"data":[],"total":0}'
+    } else if (
+      config.method === 'post' &&
+      config.url === `/reservation/${RESERVATION_ID}/cancel`
+    ) {
+      data = '{"success":true}'
     } else {
       data = '{"status":404,"error":"Not Found"}'
     }
@@ -329,6 +351,123 @@ async function verifyReservationQuery() {
       assert.deepEqual(buildReservationQuery({ current: '3', status }), { current: 3, status })
     }
   })
+
+  await check('reservation status whitelist is the exact enum source of truth', async () => {
+    assert.equal(queryModule.RESERVATION_STATUSES, ENUM_VALUES.ReservationStatus)
+    assert.deepEqual(queryModule.RESERVATION_STATUSES, [
+      'RESERVED',
+      'CANCELLED',
+      'COMPLETED',
+      'NO_SHOW',
+    ])
+
+    const source = await readFile(QUERY_PATH, 'utf8')
+    assert.match(
+      source,
+      /export\s+const\s+RESERVATION_STATUSES\s*=\s*ENUM_VALUES\.ReservationStatus/,
+    )
+    const builder = source.match(
+      /export\s+function\s+buildReservationQuery\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/,
+    )?.[1]
+    assert.match(builder ?? '', /RESERVATION_STATUSES\s*\.\s*includes\s*\(\s*status\s*\)/)
+    assert.doesNotMatch(builder ?? '', /ENUM_VALUES\.ReservationStatus/)
+  })
+}
+
+async function verifyReservationViews() {
+  console.log('\nReservation list and detail source contracts')
+
+  await check('reservation route registers a menu-less detail page', () => {
+    const appRoute = routes.find((route) => route.path === '/')
+    const detailRoute = appRoute?.children?.find(
+      (route) => route.path === 'reservations/:id',
+    )
+    assert.equal(detailRoute?.name, 'reservation-detail')
+    assert.equal(typeof detailRoute?.component, 'function')
+    assert.deepEqual(detailRoute?.meta, { title: '预约详情' })
+    assert.equal(Object.hasOwn(detailRoute?.meta ?? {}, 'menu'), false)
+  })
+
+  await check('reservation list filter and query builder share RESERVATION_STATUSES', async () => {
+    const source = await readFile(RESERVATION_LIST_PATH, 'utf8')
+    assert.match(source, /RESERVATION_STATUSES\s*\.\s*map\s*\(/)
+    assert.match(source, /resolveStatus\s*\(\s*['"]ReservationStatus['"]\s*,\s*value\s*\)\.label/)
+    assert.match(source, /buildReservationQuery\s*\(\s*route\.query\s*\)/)
+    assert.match(source, /replaceFilters\s*\(\s*\{\s*\[key\]\s*:\s*value\s*\}\s*\)/)
+    assert.match(source, /current\s*:\s*['"]1['"]/)
+    assert.match(source, /fetchReservationPage\s*\(\s*params\.value\s*\)/)
+  })
+
+  await check('reservation list detail link preserves the row id string', async () => {
+    const source = await readFile(RESERVATION_LIST_PATH, 'utf8')
+    assert.match(source, /:to="`\/reservations\/\$\{row\.id\}`"/)
+    assert.doesNotMatch(source, /(?:Number|parseInt)\s*\(\s*row\.id\s*\)|\+\s*row\.id|row\.id\s*\*\s*1/)
+  })
+
+  await check('reservation detail renders all readable VO fields and guarded empty states', async () => {
+    const source = await readFile(RESERVATION_DETAIL_PATH, 'utf8')
+    for (const field of [
+      'id',
+      'equipmentName',
+      'laboratoryName',
+      'startTime',
+      'endTime',
+      'bookingStartTime',
+      'bookingEndTime',
+      'status',
+      'createTime',
+      'updateTime',
+    ]) {
+      assert.match(source, new RegExp(`reservation\\.${field}\\b`), field)
+    }
+    assert.match(source, /StatusTag\s+enum-name="ReservationStatus"/)
+    assert.match(source, /if\s*\(\s*!isNumericId\s*\(\s*id\s*\)\s*\)/)
+    assert.match(source, /result\.kind\s*===\s*['"]denied['"]/)
+    assert.match(source, /errorMessage\.value\s*=\s*result\.message/)
+    assert.match(
+      source,
+      /result\.kind\s*===\s*['"]business['"]|result\.kind\s*===\s*['"]ok['"]\s*&&\s*!?result\.data/,
+    )
+    assert.match(source, /返回我的预约/)
+  })
+
+  await check('reservation cancellation is action-driven and always refetches after 2xx', async () => {
+    const source = await readFile(RESERVATION_DETAIL_PATH, 'utf8')
+    assert.match(source, /actions\s*\.\s*includes\s*\(\s*['"]cancel['"]\s*\)/)
+    assert.doesNotMatch(source, /\bstatus\s*===/)
+    assert.match(source, /await\s+cancelReservation\s*\(\s*id\s*\)/)
+    assert.match(
+      source,
+      /result\.status\s*>=\s*200\s*&&\s*result\.status\s*<\s*300[\s\S]*?await\s+loadDetail\s*\(/,
+    )
+    assert.doesNotMatch(source, /取消成功/)
+    assert.match(source, /ElMessageBox\s*\.\s*confirm\s*\(/)
+  })
+
+  await check('reservation cancel failure surfaces the backend message verbatim', async () => {
+    const source = await readFile(RESERVATION_DETAIL_PATH, 'utf8')
+    const handleCancel = source.match(
+      /^async\s+function\s+handleCancel\s*\([^)]*\)\s*\{[\s\S]*?^\}/m,
+    )?.[0]
+    assert.match(
+      handleCancel ?? '',
+      /ElMessage\s*\.\s*error\s*\(\s*result\s*\.\s*message\s*\)/,
+    )
+    assert.doesNotMatch(
+      handleCancel ?? '',
+      /ElMessage\s*\.\s*error\s*\(\s*['"]/,
+    )
+  })
+
+  await check('reservation ids are never numerically coerced in F6 views', async () => {
+    const listSource = await readFile(RESERVATION_LIST_PATH, 'utf8')
+    const detailSource = await readFile(RESERVATION_DETAIL_PATH, 'utf8')
+    const combined = `${listSource}\n${detailSource}`
+    assert.doesNotMatch(
+      combined,
+      /(?:Number|parseInt)\s*\(\s*(?:route\.params\.id|row\.id|reservationId)\s*\)|\+\s*(?:route\.params\.id|row\.id|reservationId)|(?:route\.params\.id|row\.id|reservationId)\s*\*\s*1/,
+    )
+  })
 }
 
 async function verifyReservationRequests() {
@@ -372,6 +511,7 @@ async function verifyReservationRequests() {
     const submitResult = await api.submitReservation(1013)
     const fetchResult = await api.fetchReservationById(RESERVATION_ID)
     const pageResult = await api.fetchReservationPage({ current: 2 })
+    const cancelResult = await api.cancelReservation(RESERVATION_ID)
 
     await check('submitReservation sends POST, JSON body, and lowercase authorization', () => {
       assert.equal(submitResult.kind, 'ok')
@@ -400,6 +540,14 @@ async function verifyReservationRequests() {
       assert.equal(capturedRequests[2].body, '')
       assert.equal(capturedRequests[2].headers.authorization, TOKEN)
     })
+
+    await check('cancelReservation preserves the id string and sends POST without a body', () => {
+      assert.equal(cancelResult.kind, 'ok')
+      assert.equal(capturedRequests[3].method, 'POST')
+      assert.equal(capturedRequests[3].url, `/reservation/${RESERVATION_ID}/cancel`)
+      assert.equal(capturedRequests[3].body, '')
+      assert.equal(capturedRequests[3].headers.authorization, TOKEN)
+    })
   } finally {
     await viteServer.close()
     if (serverListening) {
@@ -417,6 +565,7 @@ async function main() {
   await verifySubmitFailureClassification()
   await verifyPollingClassification()
   await verifyReservationQuery()
+  await verifyReservationViews()
   await verifyReservationRequests()
 
   console.log(`\nSummary: ${passCount} PASS, ${failCount} FAIL`)
