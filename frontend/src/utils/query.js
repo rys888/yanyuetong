@@ -73,6 +73,28 @@ export function hasActiveBatchFilter(params) {
   )
 }
 
+export const MANAGE_BATCH_STATUSES = ENUM_VALUES.ReservationBatchStatus
+
+export function buildManageBatchQuery(query) {
+  const equipmentId = query?.equipmentId
+  const status = query?.status
+
+  return stripEmpty({
+    current: normalizeCurrent(query?.current),
+    equipmentId:
+      equipmentId != null && isNumericId(String(equipmentId))
+        ? String(equipmentId)
+        : undefined,
+    status: MANAGE_BATCH_STATUSES.includes(status) ? status : undefined,
+  })
+}
+
+export function hasActiveManageBatchFilter(params) {
+  return ['equipmentId', 'status'].some(
+    (key) => params?.[key] !== '' && params?.[key] !== undefined && params?.[key] !== null,
+  )
+}
+
 export const RESERVATION_STATUSES = ENUM_VALUES.ReservationStatus
 
 export function buildReservationQuery(query) {

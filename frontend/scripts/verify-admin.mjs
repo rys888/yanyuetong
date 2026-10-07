@@ -15,12 +15,14 @@ process.env.no_proxy = '*'
 const FRONTEND_ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SRC_ROOT = path.join(FRONTEND_ROOT, 'src')
 const groups = {
-  A: { expected: 11, pass: 0, fail: 0, skip: 0 },
-  B: { expected: 8, pass: 0, fail: 0, skip: 0 },
+  A: { expected: 20, pass: 0, fail: 0, skip: 0 },
+  B: { expected: 24, pass: 0, fail: 0, skip: 0 },
 }
 
 let createdLaboratoryId = null
 let createdEquipmentId = null
+const createdBatchIds = []
+let closedBatchId = null
 
 async function check(groupName, name, verification) {
   try {
@@ -86,7 +88,7 @@ function extractFunctionBody(source, functionName) {
 async function verifyGroupA() {
   console.log('\nA group — admin routes, API, and source contract')
 
-  await check('A', 'admin route registers the three ordered menu entries with real icons', () => {
+  await check('A', 'admin route registers the four ordered menu entries with real icons', () => {
     const adminRoute = routes.find((route) => route.path === '/admin')
     assert.deepEqual(
       adminRoute?.children?.map((route) => [route.path, route.name]),
@@ -94,10 +96,10 @@ async function verifyGroupA() {
         ['', 'admin-home'],
         ['laboratories', 'admin-laboratory-list'],
         ['equipment', 'admin-equipment-list'],
+        ['batches', 'admin-batch-list'],
       ],
     )
-    assert.equal(adminRoute.children[1].meta.menu.order, 2)
-    assert.equal(adminRoute.children[2].meta.menu.order, 3)
+    assert.deepEqual(adminRoute.children.map((route) => route.meta.menu.order), [1, 2, 3, 4])
     for (const route of adminRoute.children) {
       assert.equal(typeof ElementPlusIcons[route.meta.menu.icon], 'object')
     }
@@ -146,6 +148,68 @@ async function verifyGroupA() {
     assert.doesNotMatch(body, /\bdata\s*:/)
   })
 
+  await check('A', 'reservation batch API exposes the exact F8 CRUD and transition surface', async () => {
+    const source = await readSource('src/api/reservationBatch.js')
+    assert.deepEqual(exportedFunctions(source).sort(), [
+      'cancelReservationBatch',
+      'closeReservationBatch',
+      'createReservationBatch',
+      'fetchManageBatchPage',
+      'fetchReservationBatchById',
+      'fetchReservationBatchPage',
+      'publishReservationBatch',
+      'updateReservationBatch',
+    ])
+    assert.equal((source.match(/method\s*:\s*['"]get['"]/g) ?? []).length, 3)
+    assert.equal((source.match(/method\s*:\s*['"]post['"]/g) ?? []).length, 4)
+    assert.equal((source.match(/method\s*:\s*['"]put['"]/g) ?? []).length, 1)
+    assert.match(source, /method\s*:\s*['"]post['"]\s*,\s*url\s*:\s*['"]\/reservation-batch['"]\s*,\s*data\s*:\s*payload/s)
+    assert.match(source, /method\s*:\s*['"]put['"]\s*,\s*url\s*:\s*['"]\/reservation-batch['"]\s*,\s*data\s*:\s*payload/s)
+    for (const action of ['publish', 'close', 'cancel']) {
+      const body = source.slice(
+        source.indexOf(`export function ${action}ReservationBatch`),
+        source.indexOf('\n}', source.indexOf(`export function ${action}ReservationBatch`)) + 2,
+      )
+      assert.match(body, new RegExp(`method\\s*:\\s*['"]post['"]`))
+      assert.match(body, new RegExp(`url\\s*:\\s*\`/reservation-batch/\\$\\{id\\}/${action}\``))
+      assert.doesNotMatch(body, /\bdata\s*:/)
+    }
+  })
+
+  await check('A', 'manage batch query accepts all four statuses and only supported parameters', async () => {
+    const query = await import('../src/utils/query.js')
+    assert.equal(query.MANAGE_BATCH_STATUSES, ENUM_VALUES.ReservationBatchStatus)
+    for (const status of ENUM_VALUES.ReservationBatchStatus) {
+      assert.deepEqual(query.buildManageBatchQuery({ current: '2', equipmentId: '12', status }), {
+        current: 2,
+        equipmentId: '12',
+        status,
+      })
+    }
+    assert.deepEqual(query.buildManageBatchQuery({
+      current: '0',
+      equipmentId: 'abc',
+      status: 'BOGUS',
+      laboratoryId: '1',
+      name: '离心机',
+      pageSize: 100,
+      sort: 'id',
+    }), { current: 1 })
+    for (const status of ['', undefined]) {
+      assert.deepEqual(query.buildManageBatchQuery({ status }), { current: 1 })
+    }
+  })
+
+  await check('A', 'manage batch active-filter predicate recognizes only equipment and status', async () => {
+    const { hasActiveManageBatchFilter } = await import('../src/utils/query.js')
+    assert.equal(hasActiveManageBatchFilter({ current: 2, laboratoryId: '1', name: 'x' }), false)
+    assert.equal(hasActiveManageBatchFilter({ equipmentId: '1' }), true)
+    assert.equal(hasActiveManageBatchFilter({ status: 'DRAFT' }), true)
+    for (const emptyValue of ['', undefined, null]) {
+      assert.equal(hasActiveManageBatchFilter({ equipmentId: emptyValue, status: emptyValue }), false)
+    }
+  })
+
   await check('A', 'equipment actions map only to valid enum targets', async () => {
     const source = await readSource('src/views/admin/equipment/AdminEquipmentListView.vue')
     const literal = source.match(/const\s+EQUIPMENT_STATUS_ACTION_TARGETS\s*=\s*\{([^}]+)\}/s)?.[1]
@@ -173,7 +237,72 @@ async function verifyGroupA() {
   const adminViewSources = async () => Promise.all([
     readSource('src/views/admin/laboratory/AdminLaboratoryListView.vue'),
     readSource('src/views/admin/equipment/AdminEquipmentListView.vue'),
+    readSource('src/views/admin/batch/AdminBatchListView.vue'),
   ])
+
+  await check('A', 'batch actions come only from status metadata and have an exact handler map', async () => {
+    const source = await readSource('src/views/admin/batch/AdminBatchListView.vue')
+    assert.match(source, /resolveStatus\s*\(\s*['"]ReservationBatchStatus['"]\s*,\s*row\.status\s*\)\.actions/)
+    assert.doesNotMatch(source, /\bstatus\s*===\s*['"](?:DRAFT|PUBLISHED|CLOSED|CANCELLED)['"]/)
+    const literal = source.match(/const\s+BATCH_STATUS_ACTION_HANDLERS\s*=\s*\{([^}]+)\}/s)?.[1]
+    assert.ok(literal, 'missing BATCH_STATUS_ACTION_HANDLERS')
+    const handlerActions = [...literal.matchAll(/\b(\w+)\s*:/g)].map((match) => match[1]).sort()
+    const statusActions = [...new Set(
+      ENUM_VALUES.ReservationBatchStatus.flatMap((status) => statusMap.ReservationBatchStatus[status].actions),
+    )].sort()
+    assert.deepEqual(handlerActions, statusActions)
+  })
+
+  await check('A', 'admin batch params use the manage query builder', async () => {
+    const source = await readSource('src/views/admin/batch/AdminBatchListView.vue')
+    assert.match(
+      source,
+      /const\s+params\s*=\s*computed\s*\(\s*\(\)\s*=>\s*buildManageBatchQuery\s*\(\s*route\.query\s*\)\s*\)/,
+    )
+    assert.doesNotMatch(source, /\bbuildBatchQuery\b/)
+  })
+
+  await check('A', 'batch cancellation stops when confirmation is rejected', async () => {
+    const source = await readSource('src/views/admin/batch/AdminBatchListView.vue')
+    const body = extractFunctionBody(source, 'handleCancel')
+    assert.match(body, /ElMessageBox\.confirm\s*\(/)
+    assert.match(body, /catch\s*(?:\([^)]*\)\s*)?\{[^}]*\breturn\b[^}]*\}/s)
+    const confirmIndex = body.indexOf('ElMessageBox.confirm')
+    const cancelIndex = body.indexOf('cancelReservationBatch(')
+    assert.notEqual(cancelIndex, -1)
+    assert.equal(confirmIndex < cancelIndex, true)
+    assert.match(body, /await\s+loadBatches\s*\(/)
+  })
+
+  await check('A', 'all four batch datetime pickers preserve the required T separator', async () => {
+    const source = await readSource('src/views/admin/batch/AdminBatchListView.vue')
+    const pickers = [...source.matchAll(/<el-date-picker\b[^>]*>/gs)].map((match) => match[0])
+    assert.equal(pickers.length, 4)
+    for (const picker of pickers) {
+      assert.match(picker, /type\s*=\s*['"]datetime['"]/)
+      assert.match(picker, /value-format\s*=\s*['"]YYYY-MM-DD\[T\]HH:mm:ss['"]/)
+    }
+  })
+
+  await check('A', 'dependent equipment options discard stale laboratory responses', async () => {
+    const source = await readSource('src/views/admin/batch/AdminBatchListView.vue')
+    const body = extractFunctionBody(source, 'loadEquipmentOptions')
+    assert.match(body, /const\s+sequence\s*=\s*\+\+equipmentRequestSequence/)
+    assert.match(body, /sequence\s*!==\s*equipmentRequestSequence/)
+    assert.match(source, /equipmentRequestSequence\s*\+=\s*1/)
+  })
+
+  await check('A', 'batch writes reload, surface backend errors, and never update records optimistically', async () => {
+    const source = await readSource('src/views/admin/batch/AdminBatchListView.vue')
+    assert.doesNotMatch(extractFunctionBody(source, 'loadBatches'), /showError\s*\(/)
+    for (const name of ['handleSave', 'handlePublish', 'handleClose', 'handleCancel']) {
+      const body = extractFunctionBody(source, name)
+      assert.match(body, /await\s+loadBatches\s*\(/)
+      assert.match(body, /showError\s*\(/)
+    }
+    assert.doesNotMatch(source, /records\.value\.(?:push|splice)\s*\(/)
+    assert.doesNotMatch(source, /records\.value\s*=\s*[^\n;]*\.filter\s*\(/)
+  })
 
   await check('A', 'admin views never infer laboratory ownership', async () => {
     for (const source of await adminViewSources()) assert.doesNotMatch(source, /adminUserId/)
@@ -210,9 +339,9 @@ async function verifyGroupA() {
     }
   })
 
-  await check('A', 'later admin domains do not exist yet', async () => {
+  await check('A', 'later admin domains after F8 do not exist yet', async () => {
     const files = await collectSourceFiles(path.join(SRC_ROOT, 'views', 'admin'))
-    for (const file of files) assert.doesNotMatch(path.basename(file), /batch|reservation|dlq/i)
+    for (const file of files) assert.doesNotMatch(path.basename(file), /reservation|dlq/i)
   })
 }
 
@@ -241,6 +370,116 @@ async function cleanupCreatedLaboratoryFixture(backendURL, token) {
   assert.equal(result.status, 200)
   assert.equal(result.body.success, true)
   createdLaboratoryId = null
+}
+
+function localDateTime(daysFromNow, hourOffset = 0) {
+  const value = new Date()
+  value.setDate(value.getDate() + daysFromNow)
+  value.setHours(value.getHours() + hourOffset)
+  value.setMilliseconds(0)
+  return value.toISOString().slice(0, 19)
+}
+
+function validBatchPayload(equipmentId = 1, dayOffset = 60, overrides = {}) {
+  return {
+    equipmentId,
+    startTime: localDateTime(dayOffset),
+    endTime: localDateTime(dayOffset, 2),
+    bookingStartTime: localDateTime(1),
+    bookingEndTime: localDateTime(dayOffset - 1),
+    totalQuota: 5,
+    ...overrides,
+  }
+}
+
+function validBatchPayloadAt(equipmentId, startDate, overrides = {}) {
+  const endDate = new Date(startDate)
+  endDate.setHours(endDate.getHours() + 2)
+  const bookingEndDate = new Date(startDate)
+  bookingEndDate.setDate(bookingEndDate.getDate() - 1)
+  return {
+    equipmentId,
+    startTime: startDate.toISOString().slice(0, 19),
+    endTime: endDate.toISOString().slice(0, 19),
+    bookingStartTime: localDateTime(1),
+    bookingEndTime: bookingEndDate.toISOString().slice(0, 19),
+    totalQuota: 5,
+    ...overrides,
+  }
+}
+
+async function createBatchFixture(backendURL, token, payload) {
+  const result = await rawRequest(backendURL, token, '/reservation-batch', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.success, true)
+  assert.match(String(result.body.data), /^\d+$/)
+  assert.equal(Number(result.body.data) > 0, true)
+  createdBatchIds.push(result.body.data)
+  return result.body.data
+}
+
+async function fetchBatchFixture(backendURL, token, id) {
+  const result = await rawRequest(backendURL, token, `/reservation-batch/${id}`)
+  assert.equal(result.status, 200)
+  assert.equal(result.body.success, true)
+  return result.body.data
+}
+
+async function manageBatchTotal(backendURL, token, equipmentId) {
+  const result = await rawRequest(
+    backendURL,
+    token,
+    `/reservation-batch/manage/page?equipmentId=${equipmentId}&current=1`,
+  )
+  assert.equal(result.status, 200)
+  assert.equal(result.body.success, true)
+  return Number(result.body.total)
+}
+
+async function nextAvailablePrimaryPayload(backendURL, token, equipmentId = 1) {
+  const candidate = new Date()
+  candidate.setDate(candidate.getDate() + 60)
+  candidate.setMilliseconds(0)
+  for (const status of ['DRAFT', 'PUBLISHED', 'CLOSED']) {
+    let current = 1
+    let total = 0
+    do {
+      const result = await rawRequest(
+        backendURL,
+        token,
+        `/reservation-batch/manage/page?equipmentId=${equipmentId}&status=${status}&current=${current}`,
+      )
+      assert.equal(result.status, 200)
+      assert.equal(result.body.success, true)
+      const rows = Array.isArray(result.body.data) ? result.body.data : []
+      total = Number(result.body.total) || 0
+      for (const row of rows) {
+        const endTime = new Date(row.endTime)
+        if (endTime >= candidate) {
+          candidate.setTime(endTime.getTime())
+          candidate.setDate(candidate.getDate() + 1)
+        }
+      }
+      current += 1
+    } while ((current - 1) * 5 < total)
+  }
+  return validBatchPayloadAt(equipmentId, candidate)
+}
+
+async function cleanupCreatedBatchFixtures(backendURL, token) {
+  for (const id of createdBatchIds) {
+    const batch = await fetchBatchFixture(backendURL, token, id)
+    if (['DRAFT', 'PUBLISHED'].includes(batch.status)) {
+      const cancelled = await rawRequest(backendURL, token, `/reservation-batch/${id}/cancel`, {
+        method: 'POST',
+      })
+      assert.equal(cancelled.status, 200)
+      assert.equal(cancelled.body.success, true)
+    }
+  }
 }
 
 async function verifyGroupB() {
@@ -396,6 +635,208 @@ async function verifyGroupB() {
     })
     assert.equal(result.status, 403)
     assert.equal(result.body.errorMsg, '无权管理该实验室')
+  })
+
+  let primaryBatchId = null
+  let cancelBatchId = null
+  const primaryPayload = await nextAvailablePrimaryPayload(backendURL, token)
+  try {
+    await check('B', 'space-separated batch datetimes are rejected without creating a fixture', async () => {
+      const before = await manageBatchTotal(backendURL, token, 1)
+      const payload = Object.fromEntries(
+        Object.entries(primaryPayload).map(([key, value]) => [
+          key,
+          typeof value === 'string' ? value.replace('T', ' ') : value,
+        ]),
+      )
+      const result = await rawRequest(backendURL, token, '/reservation-batch', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+      assert.equal(result.status, 400)
+      assert.equal(result.body.errorMsg, '请求体格式错误')
+      assert.equal(await manageBatchTotal(backendURL, token, 1), before)
+    })
+
+    await check('B', 'T-separated batch datetimes reach required-field validation', async () => {
+      const before = await manageBatchTotal(backendURL, token, 1)
+      const payload = { ...primaryPayload }
+      delete payload.totalQuota
+      const result = await rawRequest(backendURL, token, '/reservation-batch', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+      assert.equal(result.status, 400)
+      assert.equal(result.body.errorMsg, '批次必填字段不能为空')
+      assert.equal(await manageBatchTotal(backendURL, token, 1), before)
+    })
+
+    await check('B', 'created draft is owned by the admin and absent from the public page', async () => {
+      primaryBatchId = await createBatchFixture(backendURL, token, primaryPayload)
+      const managed = await rawRequest(
+        backendURL,
+        token,
+        `/reservation-batch/manage/page?equipmentId=1&status=DRAFT&current=1`,
+      )
+      assert.equal(managed.status, 200)
+      assert.equal(managed.body.success, true)
+      assert.equal(managed.body.data.some((row) => String(row.id) === String(primaryBatchId)), true)
+      const publicPage = await rawRequest(
+        backendURL,
+        token,
+        '/reservation-batch/page?equipmentId=1&current=1',
+      )
+      assert.equal(publicPage.status, 200)
+      assert.equal(publicPage.body.success, true)
+      assert.equal(publicPage.body.data.some((row) => String(row.id) === String(primaryBatchId)), false)
+    })
+
+    await check('B', 'creating a batch for another laboratory is denied', async () => {
+      const result = await rawRequest(backendURL, token, '/reservation-batch', {
+        method: 'POST',
+        body: JSON.stringify(validBatchPayload(12, 62)),
+      })
+      assert.equal(result.status, 403)
+      assert.equal(result.body.errorMsg, '无权管理该实验室')
+    })
+
+    await check('B', 'draft total quota can be updated', async () => {
+      if (!primaryBatchId) return skip('主草稿未创建')
+      const result = await rawRequest(backendURL, token, '/reservation-batch', {
+        method: 'PUT',
+        body: JSON.stringify({ ...primaryPayload, id: primaryBatchId, totalQuota: 6 }),
+      })
+      assert.equal(result.status, 200)
+      assert.equal(result.body.success, true)
+      const batch = await fetchBatchFixture(backendURL, token, primaryBatchId)
+      assert.equal(batch.totalQuota, 6)
+    })
+
+    await check('B', 'publishing initializes remaining quota and status from the saved draft', async () => {
+      if (!primaryBatchId) return skip('主草稿未创建')
+      const result = await rawRequest(backendURL, token, `/reservation-batch/${primaryBatchId}/publish`, {
+        method: 'POST',
+      })
+      assert.equal(result.status, 200)
+      assert.equal(result.body.success, true)
+      const batch = await fetchBatchFixture(backendURL, token, primaryBatchId)
+      assert.equal(batch.status, 'PUBLISHED')
+      assert.equal(batch.totalQuota, 6)
+      assert.equal(batch.remainingQuota, batch.totalQuota)
+    })
+
+    await check('B', 'published batch rejects further edits with the exact backend message', async () => {
+      if (!primaryBatchId) return skip('主批次未创建')
+      const result = await rawRequest(backendURL, token, '/reservation-batch', {
+        method: 'PUT',
+        body: JSON.stringify({ ...primaryPayload, id: primaryBatchId, totalQuota: 7 }),
+      })
+      assert.equal(result.status, 400)
+      assert.equal(result.body.errorMsg, '仅草稿批次可修改')
+    })
+
+    await check('B', 'overlapping use time is rejected with the exact backend message', async () => {
+      const id = await createBatchFixture(backendURL, token, { ...primaryPayload, totalQuota: 5 })
+      const result = await rawRequest(backendURL, token, `/reservation-batch/${id}/publish`, {
+        method: 'POST',
+      })
+      assert.equal(result.status, 400)
+      assert.equal(result.body.errorMsg, '同一设备的使用时段不能重叠')
+    })
+
+    await check('B', 'booking deadline after use start is rejected with the exact backend message', async () => {
+      const startTime = localDateTime(63)
+      const id = await createBatchFixture(backendURL, token, validBatchPayload(3, 63, {
+        startTime,
+        endTime: localDateTime(63, 2),
+        bookingEndTime: localDateTime(63, 1),
+      }))
+      const result = await rawRequest(backendURL, token, `/reservation-batch/${id}/publish`, {
+        method: 'POST',
+      })
+      assert.equal(result.status, 400)
+      assert.equal(result.body.errorMsg, '预约截止时间不能晚于使用开始时间')
+    })
+
+    await check('B', 'unavailable equipment is rejected with the exact backend message', async () => {
+      const id = await createBatchFixture(backendURL, token, validBatchPayload(2, 64))
+      const result = await rawRequest(backendURL, token, `/reservation-batch/${id}/publish`, {
+        method: 'POST',
+      })
+      assert.equal(result.status, 400)
+      assert.equal(result.body.errorMsg, '设备当前不可预约')
+    })
+
+    await check('B', 'quota below one is rejected with the exact backend message', async () => {
+      const id = await createBatchFixture(backendURL, token, validBatchPayload(4, 65, { totalQuota: 0 }))
+      const result = await rawRequest(backendURL, token, `/reservation-batch/${id}/publish`, {
+        method: 'POST',
+      })
+      assert.equal(result.status, 400)
+      assert.equal(result.body.errorMsg, '总名额必须大于等于1')
+    })
+
+    await check('B', 'closing a published batch closes booking and rejects a repeated close', async () => {
+      if (!primaryBatchId) return skip('主批次未创建')
+      const result = await rawRequest(backendURL, token, `/reservation-batch/${primaryBatchId}/close`, {
+        method: 'POST',
+      })
+      assert.equal(result.status, 200)
+      assert.equal(result.body.success, true)
+      closedBatchId = primaryBatchId
+      const batch = await fetchBatchFixture(backendURL, token, primaryBatchId)
+      assert.equal(batch.status, 'CLOSED')
+      assert.equal(batch.bookingState, 'CLOSED')
+      const repeated = await rawRequest(backendURL, token, `/reservation-batch/${primaryBatchId}/close`, {
+        method: 'POST',
+      })
+      assert.equal(repeated.status, 400)
+      assert.equal(repeated.body.errorMsg, '仅已发布批次可关闭')
+    })
+
+    await check('B', 'published batches can cancel while closed batches cannot', async () => {
+      const cancelPayload = await nextAvailablePrimaryPayload(backendURL, token, 9)
+      cancelBatchId = await createBatchFixture(backendURL, token, cancelPayload)
+      const published = await rawRequest(backendURL, token, `/reservation-batch/${cancelBatchId}/publish`, {
+        method: 'POST',
+      })
+      assert.equal(published.status, 200)
+      const cancelled = await rawRequest(backendURL, token, `/reservation-batch/${cancelBatchId}/cancel`, {
+        method: 'POST',
+      })
+      assert.equal(cancelled.status, 200)
+      assert.equal((await fetchBatchFixture(backendURL, token, cancelBatchId)).status, 'CANCELLED')
+      if (!closedBatchId) return skip('关闭夹具未创建')
+      const closedCancel = await rawRequest(backendURL, token, `/reservation-batch/${closedBatchId}/cancel`, {
+        method: 'POST',
+      })
+      assert.equal(closedCancel.status, 400)
+      assert.equal(closedCancel.body.errorMsg, '仅草稿或已发布批次可取消')
+    })
+  } finally {
+    await cleanupCreatedBatchFixtures(backendURL, token)
+  }
+
+  const finalBatchStates = new Map()
+  for (const id of createdBatchIds) {
+    finalBatchStates.set(String(id), (await fetchBatchFixture(backendURL, token, id)).status)
+  }
+
+  await check('B', 'exactly the close-semantics fixture remains CLOSED', () => {
+    const closedIds = [...finalBatchStates].filter(([, status]) => status === 'CLOSED').map(([id]) => id)
+    assert.deepEqual(closedIds, [String(closedBatchId)])
+  })
+
+  await check('B', 'every other created batch is cleaned to CANCELLED', () => {
+    for (const [id, status] of finalBatchStates) {
+      if (id !== String(closedBatchId)) assert.equal(status, 'CANCELLED', `batch ${id}`)
+    }
+  })
+
+  await check('B', 'no created batch remains DRAFT or PUBLISHED', () => {
+    for (const [id, status] of finalBatchStates) {
+      assert.equal(['DRAFT', 'PUBLISHED'].includes(status), false, `batch ${id}`)
+    }
   })
 }
 

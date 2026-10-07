@@ -307,40 +307,72 @@ async function verifyGroupA() {
     ])
   })
 
-  await check('A', 'admin routes stay inside the F7 surface and later admin domains do not exist yet', async () => {
+  await check('A', 'admin routes stay inside the F8 surface and later admin domains do not exist yet', async () => {
     const adminRoute = routes.find((route) => route.path === '/admin')
-    // 白名单而非"非空即可"：F8 加批次管理、F9 加预约记录、F10 加死信时必须显式更新这里。
+    // 白名单而非"非空即可"：F9 加预约记录、F10 加死信时必须显式更新这里。
     assert.deepEqual(
       adminRoute?.children?.map((route) => [route.path, route.name]).sort(),
       [
         ['', 'admin-home'],
+        ['batches', 'admin-batch-list'],
         ['equipment', 'admin-equipment-list'],
         ['laboratories', 'admin-laboratory-list'],
       ].sort(),
     )
     assert.deepEqual(adminRoute?.meta?.roles, ['LAB_ADMIN'])
 
-    // 原断言的意图 = "后续 Phase 的管理端域尚未进入"。F7 之后 admin 目录归 F7 所有，
+    // 原断言的意图 = "后续 Phase 的管理端域尚未进入"。F8 之后 admin 目录归 F7/F8 所有，
     // 所以把它从"目录不许有改动"收紧为"目录里不许出现后续 Phase 的域"。
     const adminViews = (await collectSourceFiles(path.join(SRC_ROOT, 'views', 'admin')))
       .map((file) => path.relative(FRONTEND_ROOT, file))
     assert.ok(adminViews.length > 0, 'admin 视图目录不应为空')
     for (const file of adminViews) {
-      assert.doesNotMatch(file, /batch|reservation|dlq/i, file)
+      assert.doesNotMatch(file, /reservation|dlq/i, file)
     }
   })
 
-  await check('A', 'reservationBatch API exposes only the two read-only GET functions', async () => {
+  await check('A', 'reservationBatch API exposes the exact F8 read and write surface', async () => {
     const source = await readSource('src/api/reservationBatch.js')
     const exports = [...source.matchAll(/export\s+function\s+(\w+)\s*\(/g)].map(
       (match) => match[1],
     )
-    assert.deepEqual(exports, ['fetchReservationBatchPage', 'fetchReservationBatchById'])
-    assert.match(source, /url\s*:\s*['"]\/reservation-batch\/page['"]/)
-    assert.match(source, /url\s*:\s*`\/reservation-batch\/\$\{id\}`/)
-    assert.equal((source.match(/method\s*:\s*['"]get['"]/g) ?? []).length, 2)
-    assert.doesNotMatch(source, /method\s*:\s*['"](?:post|put|patch|delete)['"]/i)
-    assert.doesNotMatch(source, /\b(?:publish|close|cancel|create|submit|manage)\b/i)
+    assert.deepEqual(exports.sort(), [
+      'cancelReservationBatch',
+      'closeReservationBatch',
+      'createReservationBatch',
+      'fetchManageBatchPage',
+      'fetchReservationBatchById',
+      'fetchReservationBatchPage',
+      'publishReservationBatch',
+      'updateReservationBatch',
+    ])
+    assert.equal((source.match(/method\s*:\s*['"]get['"]/g) ?? []).length, 3)
+    assert.equal((source.match(/method\s*:\s*['"]post['"]/g) ?? []).length, 4)
+    assert.equal((source.match(/method\s*:\s*['"]put['"]/g) ?? []).length, 1)
+    const urls = [...new Set(
+      [...source.matchAll(/url\s*:\s*([`'"])(.*?)\1/g)].map((match) => match[2]),
+    )]
+    assert.deepEqual(urls.sort(), [
+      '/reservation-batch',
+      '/reservation-batch/${id}',
+      '/reservation-batch/${id}/cancel',
+      '/reservation-batch/${id}/close',
+      '/reservation-batch/${id}/publish',
+      '/reservation-batch/manage/page',
+      '/reservation-batch/page',
+    ].sort())
+
+    const reservationVerifyPathPattern = /\/reservation\/[^'"`]*\/verify/
+    assert.match('url: `/reservation/${id}/verify`', reservationVerifyPathPattern)
+
+    const sourceFiles = await collectSourceFiles(SRC_ROOT)
+    for (const file of sourceFiles) {
+      const fileSource = await readFile(file, 'utf8')
+      const relativePath = path.relative(FRONTEND_ROOT, file)
+      assert.doesNotMatch(fileSource, /\/reservation\/manage\/page/, relativePath)
+      assert.doesNotMatch(fileSource, reservationVerifyPathPattern, relativePath)
+      assert.doesNotMatch(fileSource, /\/reservation-dlq/, relativePath)
+    }
   })
 }
 
