@@ -1,9 +1,9 @@
 export const statusMap = {
   ReservationStatus: {
-    RESERVED: { label: '已预约', tag: 'success', actions: ['cancel'] },
-    CANCELLED: { label: '已取消', tag: 'info', actions: [] },
-    COMPLETED: { label: '已核验', tag: 'primary', actions: [] },
-    NO_SHOW: { label: '未到场', tag: 'warning', actions: [] },
+    RESERVED: { label: '已预约', tag: 'success', actions: ['cancel'], manageActions: ['verify'] },
+    CANCELLED: { label: '已取消', tag: 'info', actions: [], manageActions: [] },
+    COMPLETED: { label: '已核验', tag: 'primary', actions: [], manageActions: [] },
+    NO_SHOW: { label: '未到场', tag: 'warning', actions: [], manageActions: [] },
   },
   ReservationBatchStatus: {
     DRAFT: { label: '草稿', tag: 'info', actions: ['edit', 'publish', 'cancel'] },

@@ -1217,6 +1217,120 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 
 ---
 
+### F9 验收实测记录（2026-10-07，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain` 共 12 项，其中 **F9 占 9 项** —— 改 8：`docs/frontend/FRONTEND-DESIGN.md`、`frontend/scripts/verify-admin.mjs`、`frontend/scripts/verify-batch.mjs`、`frontend/scripts/verify-request-layer.mjs`、`frontend/src/api/reservation.js`、`frontend/src/constants/statusMap.js`、`frontend/src/router/routes.js`、`frontend/src/utils/query.js`；增 1 目录：`frontend/src/views/admin/reservation/`（内含**恰好 1 个**文件 `AdminReservationListView.vue`，7638 B）。其余 4 项**与 F9 无关**：`.gitignore`（**并发会话**为 `benchmark/.runtime/` 加的忽略行）、`benchmark/`、`docs/study/`（**凭据地雷**：18 个文件里 12 个命中凭据模式）、`jmeter.log` —— 提交时必须**逐条显式列路径**排除，**绝不能用 `git add -A`**。
+
+**后端零接触**：`git status --porcelain` 中无任何后端路径（无 `src/main`、无 `.java`、无 `pom.xml`）。判据①–⑤ 依赖的"后端已具备的能力"**全部是既有实现**：`ReservationController:43/56` 的 `@RequireRole(LAB_ADMIN)` 两个端点、`ReservationServiceImpl.verify` 的闸门顺序、`ReservationLifecycleServiceImpl.complete` 的幂等分支、`ReservationMapper.xml` 的 `adminUserId` 过滤，**F9 一行未改**。
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `node scripts/verify-admin.mjs`（带真实后端 + F9 夹具） | **A 组 30 PASS / 0 FAIL** | A 组是 F9 的全部静态与接口面锁 |
+| 同上 B 组（真机 + 夹具） | **A 30 PASS / 0 FAIL；B 组 8 条 F9 专属断言全绿**（判据①–⑤ 落点见下表）；余下为 F8 继承的批次生命周期断言，受**并发压测会话**阻断（见下） | B 组满编 32 条 |
+| **浏览器仪器（F9，12 断言，零依赖 CDP）** | **12 PASS / 0 FAIL / 0 崩溃** | 段 1（夹具 A，7 条）+ 段 2（夹具 B，5 条），两段全跑完 |
+| `npm run check:batch`（C 组指向 OPEN 夹具 11066） | **A 13 + B 6 + C 3 = 22 PASS / 0 FAIL** | C 组原用的 11005 预约窗口已过期（`EXPIRED`），改用夹具 A 后 **3/3** |
+| `npm run check:request` | **26 PASS / 0 FAIL** | 未回归 |
+| `npm run check:browse` | **37 PASS / 0 FAIL** | 未回归 |
+| `npm run check:session` | **24 PASS / 0 FAIL** | 另 3 条需 `VERIFY_CODE`，未跑 |
+| `npm run check:reservation` | **32 PASS / 0 FAIL** | 未回归 |
+| `npm run build` | **exit 0** | 生成独立 `AdminReservationListView-BC96uoEt.js`（4.59 kB）+ 配套 CSS（529 B），路由级切分生效 |
+| DB 复核 | **8 行预约 / 17 个批次**；夹具 `11066/11067` 各 1 行、均 `RESERVED` | 无遗留运行残留 |
+
+#### §10 判据 ①–⑤ 的落点
+
+| 判据 | 落点与实测证据 |
+|---|---|
+| ① 管理端列表只显示**自己实验室**的预约 | B 组 `managed reservation page includes own ids and excludes foreign ids and batches` —— **一条断言里同时断言"含自己的 id"与"不含外来 id 与外来批次"**：只断言"看不见"会在**空列表上恒真**，故必须带阳性对照。正面证据由 CDP 仪器独立给出：`?batchId=11066` 过滤后表格**恰好 1 行**、预约人列=`1`、实验室列=`分析测试实验室`（属管理员 1016）。**前端侧原理上无从判别归属**——`ReservationVO` 不含 `adminUserId`，过滤只可能发生在后端 SQL |
+| ② 未到 `startTime` 核验 → 400 `预约尚未开始，无法核验` | 两层。B 组 `not-started verification returns the exact 400 message with zero side effects`（断言**精确文案** + `status`/`update_time` 前后不变）。**页面级**：CDP 段 1 点行内「核验」→ 二次确认 → 点「核验」→ 页面 toast **逐字**出现 `预约尚未开始，无法核验`，且该行仍是「已预约」、「核验」按钮仍在（**零副作用在 UI 上可见**） |
+| ③ 核验成功后**重新拉取**显示「已核验」 | 两层。B 组 `started verification completes the exact reservation id and reload observes COMPLETED`（**用 18 位 id 精确断言**，不是模糊匹配）。**页面级**：CDP 段 2 点「核验」后轮询该行状态**由「已预约」变为「已核验」**，且**整页刷新后仍为「已核验」**（证明是服务端真值，不是本地乐观更新）——两条合起来即"成功后重取" |
+| ④ 再次核验返回 200 但页面**不得**提示"核验成功" | **三层证据，缺一层都不够**：① B 组 `repeated verification stays 200 without changing completed update time`（幂等：**响应体与首次成功完全相同、`update_time` 未被触碰**，故"200 了但什么都没发生"）；② A 组 `reservation verification reloads before success and gates the toast on a status difference` 从**源码层面**锁住"提示以状态差为条件"（变异 M3 证明这条有牙）；③ CDP 段 2 证明 `COMPLETED` 行的**操作列按钮数为 0** ⇒ **二次点击在 UI 上根本不可达**（"入口消失"比"点了不给提示"更强） |
+| ⑤ 对自己无权实验室的预约核验 → 403 | B 组 `foreign not-started reservation is denied before the lifecycle gate`：外来夹具取的是"**批次 `start_time` 在未来** + `RESERVED`"的行 —— 这样 403 与 400 才构成有效对照（若批次已开始，400 会先命中，断言就测不到 403）。**值得单独记的是闸门顺序**：`ReservationServiceImpl.verify` 里 `assertManageable` **排在** `reservationLifecycleService.complete` **之前**，故越权核验**不可能产生任何状态变更**。另两条同族：`student role cannot access reservation management or verification`（学生 403）、`reservation management and verification require authentication`（无 token 401） |
+
+#### 并发写入者：本 Phase 遇到的新环境变量
+
+另一个 Claude 会话在 `benchmark/` 下建压测链，**共享同一个 `hmdp` 库**，在**设备 1（实验室 1 → 管理员 1016）**建 8 个 PUBLISHED 批次并灌入预约，实测写入速率 **~137–330 行/秒**。后果不是数据被污染那么简单：
+
+- `verify-admin.mjs` 的 `fetchManagedReservations` 是 `do { … } while ((current - 1) * 5 < total)`：当 `total` 在 **40002** 且仍在增长时，**翻页速率（~125 行/秒）追不上写入速率** ⇒ 该循环**永不终止**。B 组在压测期间**绝对不能跑**（我加了 600 s 看门狗才敢在低位窗口尝试）。
+- 该会话的 cleanup **会把设备 1 上的既有批次一并删掉**：F8 留下的夹具批次 **11065 不复存在**（已核验全仓 `scripts/` 与 `src/` **零引用**，`VERIFY_BATCH_ID=11005` 来自 env，故对验证套件无害）。
+- **它自己的风险**：`benchmark/` 整目录**未被 gitignore**（13 个文件里 `password` 命中 4 个、`authorization` 命中 5 个）——一次 `git add -A` 会把真实口令写进不可撤销的历史。已向用户报告，建议整目录加入 `.gitignore`。
+
+#### 仪器自身的坑（第 12 个）
+
+**`v-loading` 的淡出遮罩会吞掉"看不见"的第一次点击。** 首轮跑出 `段 1 首次点击 → 对话框未出现`，而**同一页面状态的第二次点击正常**（段 2 的首次点击也正常）——看起来像应用"第一次点核验没反应"，**实际是仪器自己的竞态**。用 `elementFromPoint` 逐 200 ms 采样直接抓到真凶：行一出现在 DOM 的那一刻（`t=0.0s`），按钮坐标上的顶层元素是 `DIV.el-loading-mask`，类名 `el-loading-fade-leave-active`、**`opacity: 0` 但 `display: block`** —— `v-loading` 的遮罩**在淡出的 300 ms 里仍在 DOM 中**并照常吃点击；`t=0.2s` 遮罩消失，同一坐标立刻可点。
+
+两处已修（否则这条会伪装成应用缺陷）：
+1. **点击前必须等 `.el-loading-mask` 从 DOM 消失**，且 `elementFromPoint` 的落点必须落在**按钮子树内**。判据不能写成"顶层元素就是 button"——健康状态下返回的是按钮内层 `SPAN`（实测 `topIsButton` **恒为 false**），照那样写**健康页也会被误判**。两条合起来才是"可点"的充分条件。
+2. 附带发现同类：**失败断言会被打印两遍**（跑动时一次、末尾汇总一次），解析时必须按标签去重，否则会把 1 个失败数成 2 个。
+
+**教训与 F5 第 3 条、F7 第 9 条同族：短命 UI 元素（toast、遮罩）不能当作"前提已就绪"的判据。**
+
+#### 证伪实验（18 个 A 组变异 + 3 个页面级变异，复原后逐字节一致）
+
+**打在生产文件上**（`AdminReservationListView.vue` / `statusMap.js` / `routes.js` / `query.js` / `api/reservation.js`），复原用**内存字节快照 + `sha256` 逐字节比对**（**不用 `git checkout`**——F9 改动全部未暂存，且 `views/admin/reservation/` 是**未跟踪目录**，从索引恢复等于把整个 F9 抹成空）。跑变异时**不注入 `VERIFY_BACKEND`/`VERIFY_ADMIN_TOKEN`**，只跑 A 组，**零 DB 副作用**，与并发压测会话互不干扰。每条变异跑完**立刻**从快照复原再跑下一条；`SIGINT`/`SIGTERM` 也挂复原钩子。
+
+| 变异 | 改坏什么 | 期望 | 实际 | 变红断言 |
+|---|---|---|---|---|
+| M1 | 视图 import 换成学生端 `buildReservationQuery` | FAIL | **CAUGHT** | `admin reservation view has no status literal branches and uses the manage query builder` |
+| M2 | 摘掉二次确认 | FAIL | **CAUGHT** | `reservation verification stops when confirmation is rejected` |
+| M3 | 状态差守卫退化为"200 即提示成功" | FAIL | **CAUGHT** | `reservation verification reloads before success and gates the toast on a status difference` |
+| M4 | 核验成功后不重取（乐观更新） | FAIL | **CAUGHT** | 同上 + `…stops when confirmation is rejected` |
+| M5 | 确认被拒后丢掉 `return`（`catch {}`） | FAIL | **CAUGHT** | `…stops when confirmation is rejected` |
+| M6 | 视图写状态字面量分支 | FAIL | **CAUGHT** | `reservation actions come only from manage metadata…` + `…no status literal branches…` |
+| M7 | 视图直接 import `axios` | FAIL | **CAUGHT** | `admin views use the API layer instead of axios` |
+| M8 | 越界预埋 F10 的 DLQ 管理端域 | FAIL | **CAUGHT** | `admin route registers the five ordered menu entries with real icons` |
+| M9 | 管理端预约记录子路由改名 | FAIL | **CAUGHT** | 同上 |
+| M10 | 菜单 `order: 5 → 6` | FAIL | **CAUGHT** | 同上 |
+| M11 | 摘掉 `/admin` 的 `meta.roles` | FAIL | **CAUGHT** | `new admin routes inherit roles from the parent` |
+| M12 | `RESERVED.manageActions` 清空 | FAIL | **CAUGHT** | `reservation actions come only from manage metadata…` + `reservation manage actions are orthogonal…` |
+| M13 | `COMPLETED.manageActions` 改成 `['verify']` | FAIL | **CAUGHT** | `reservation manage actions are orthogonal…` |
+| M14 | `manageActions` 泄漏进学生端 `actions` | FAIL | **CAUGHT** | 同上 |
+| M15 | 管理端状态白名单退化为公开两态 | FAIL | **CAUGHT** | `manage reservation query accepts numeric batch ids and all reservation statuses only` |
+| M16 | 摘掉 `batchId` 的数字校验 | FAIL | **CAUGHT** | 同上 |
+| M17 | 活跃筛选谓词把 `current` 也算进去 | FAIL | **CAUGHT** | `manage reservation active-filter predicate recognizes only batch and status` |
+| M18 | 核验端点 `POST → GET` | FAIL | **CAUGHT** | `reservation API exposes the exact F9 surface and transport contract` |
+
+**18/18 CAUGHT，0 SURVIVED，0 INVALID，复原后 5 个文件哈希逐字节一致。** 与 F8 的 M10/M11 两条"首轮全绿"相比，F9 的 A 组**没有留缺口**——原因不是运气，是 F9 把"视图调用了哪个 builder"和"二次确认被拒后是否中断"这两类**接线缺陷**先写成了断言（A 组第 18、17 条），而这两条正是 F8 事后才补的。
+
+**页面级变异（证明 CDP 那 12 条不是空转）**：只跑段 1（`F9_CDP_ONLY=A`，只读夹具 A、不改其状态）。
+
+| 变异 | 改坏什么 | 期望 | 实际 |
+|---|---|---|---|
+| C1 | 摘掉二次确认 | FAIL | **CAUGHT**（`弹出二次确认对话框` 及后续 2 条） |
+| C2 | 确认被拒后丢掉 `return` | FAIL | **CAUGHT**（`点「返回」…零 /verify 请求`） |
+| C3 | `RESERVED.manageActions` 清空 | FAIL | **CAUGHT**（前置「提供核验按钮」及其后 5 条） |
+
+**C2 是这轮最有价值的一条**：它证明那条**否定式断言**（"点「返回」后 `/verify` 请求增量必须为 0"）真的会红——否定式断言最容易在坏页/空页上**空转通过**，故它被刻意写成与"对话框确实出现过"**合取**（前置不成立时断言直接判失败，而不是判通过）。
+
+#### 提交字节校验（快照陈旧 ≠ 变异残留）
+
+提交前用交付哈希复核「**提交的字节 == 实测过的字节**」，发现 `frontend/scripts/verify-admin.mjs` 与 17:29:14 拍的快照**不符**（`ba975d11…` vs `8ad55307…`），其余 5 个文件逐字节一致。
+
+**定性过程（三条互不依赖的证据）**：① `mtime` 时间线 —— 快照 17:29:14、run 1 17:34:12、**该文件 17:36:10 被改**、run 2 17:37:03 ⇒ 快照**早于** R2 修复，run 2 与 17:51 的回归跑的都是**最终版**；② 内容标记 —— R1 断言与 `parseBigintJson` 各命中、**裸 `JSON.parse` 归零**，与 R2 的修法一致；③ 该文件**从不在变异清单内**（M1–M18 只打 `vue`/`statusMap`/`routes`/`query`/`api` 五个文件），故「变异残留」在原理上不成立。
+
+**决定性复核**：拿**已提交的字节**重跑 A 组（离线、零 DB 副作用）⇒ **A 组 30 PASS / 0 FAIL / 0 SKIP**；B 组 32 条全 SKIP（未注入后端，符合预期）。另跑残留探针：4 类视图变异串（`Promise.resolve`、`import axios from 'axios'`、builder 别名替换、`row.status === 'COMPLETED' ? [] : ['verify']`）在 6 个交付文件上**零命中**。
+
+**教训（与「变异残留」同族，但方向相反）**：交付哈希快照必须**在最后一次编辑之后**拍，否则「哈希不符」这一信号会与「变异残留」**同形**——把真警号淹没在假警号里。本次靠 `mtime` + 内容标记 + 「该文件不在变异清单」三条互不依赖的证据才判成假警号；只凭其中一条都会误判。**变异前自拍快照这条纪律仍成立，但必须连着「拍完不许再改」一起执行**。
+
+#### Review 发现的问题（4 项）
+
+1. **R1 · 规格违背：核验没有二次确认。** `FRONTEND-DESIGN.md:593` 明写"行内核验（**含二次确认**与成功后重取）"，而交付视图里根本没有 `ElMessageBox.confirm`。已按 F8 `handleCancel` 同构补齐（`type:'warning'`、确认/取消文案「核验」「返回」），并新增 A 组断言 `reservation verification stops when confirmation is rejected`（**A 组 29 → 30 条**）。**这是"交付物通过了所有测试却仍未满足规格"的实例**——判定依据是规格原文，不是测试绿光。
+2. **R2 · 校验脚本的雪花 id 精度缺陷（真缺陷，由真机跑出来）。** B 组首轮 5 FAIL，其中 4 条报的是 `managed reservation <id> not found`——**报错信息本身误导**。真因是 `rawRequest` 用裸 `JSON.parse`：18 位雪花 id `645959834323624548` 被舍入成 `…600`，而断言比较的是 `String(row.id) === process.env.VERIFY_RESERVATION_*_ID` ⇒ **永远为假**。修法：**import 生产同款解析器** `parseBigintJson`（`json-bigint@1.0.0` 本就是 `package.json:22` 的依赖，零新依赖），理由是**校验脚本必须与生产用同一个解析器**——若脚本自己另实现一份，两边精度行为一旦漂移，"绿"就失去意义。
+3. **R3 · 非数字路径段实测走 500 通道（跨切面既有瑕疵，只记录不改）。** `POST /reservation/not-a-number/verify` 实测 **500 `服务器异常`**，而原断言只允许 `[400,403]`。这**不是 F9 引入的**：`@PathVariable Long` 类型转换失败被全局处理器兜成 500，与 `scripts/verify-browse.mjs:437` 记录的 `non-numeric equipment id produces the measured 500 channel` **是同一类实测通道**。F9 后端零接触，故断言改为**记录实测 500 通道**并在注释里指向先例。
+4. **R4 · `nextAvailablePrimaryPayload` 的 UTC/本地 8 小时偏移（F8 遗留夹具缺陷，本轮暴露）。** B 组第二次运行出现 `publish` 返回 400 `同一设备的使用时段不能重叠`，根因是运行 1 在**设备 1** 留下 `batch 11068 CLOSED`（窗口 09:34–11:34），而本次选窗 09:37–11:37 与之重叠。更深一层：该 helper 用 `toISOString()`（**UTC**）生成载荷，而扫描用的是**本地** `endTime` ⇒ 实际发出的窗口比它推理的时刻**早 8 小时**，两者错位。**这不是 F9 缺陷**（run 1 里这 4 条是 PASS 的），处置是清除运行残留；**helper 本身未改**（属 F8 交付物，改动会牵动 F8 的变异记录），登记为已知缺口。
+
+#### 迄今仍未覆盖
+
+- **判据① 的页面级证据是"间接"的**：CDP 仪器能证明"筛出来的行确实属于自己"，但**证不了"本不该出现的行没出现"**——因为前端**没有字段**可判归属（`ReservationVO` 无 `adminUserId`，G-F9-1）。"排除外来行"这条**只有 B 组（后端 SQL）能证**。这与 F8 判据①的同族限制一致。
+- **判据④ 的"重复核验"在 UI 上不可达**：`COMPLETED` 行的核验入口已消失，故**无法用真机点第二次**。该判据的页面半边靠**构造性证据**（入口消失）+ A 组源码锁，API 半边靠 B 组幂等断言。**这是"更强"而不是"没测"**，但要说清它没被"点"过。
+- **`RESERVATION_STATUSES` 学生端与管理端共用**（D-F9-3）：管理端筛选下拉的四个取值来自与学生端同一个常量。当前**无误**（两端都该看到全部四个状态），但**若将来学生端要收窄可见状态，管理端会跟着一起窄**——登记备查。
+- **管理端无单条预约详情端点**（D-5）：核验前看不到完整信息。已裁定**不新增端点**（列表行已含设备名/实验室名/时段/状态/`quotaReleased`）。F9 据此做成"行内直接核验 + 二次确认"，**D-5 结案**。
+- **`ReservationVO` 不含 `userName`**（G-F9-1）：列表**只能显示预约人 ID**（页面列名如实写"预约人 ID"）。若演示需要姓名，最小改法是 `ReservationMapper.xml` 的 `selectReservationPage` 多 `LEFT JOIN tb_user`——**涉及后端，等批准**。
+- **B 组的 F8 继承断言本轮未能拿到"满编 62/62"的干净记录**：并发压测会话在设备 1 持续写入 ~4 万行，使 `fetchManagedReservations` 的分页循环无法终止（见上）。**F9 专属的 8 条断言在污染前的 run 2 已全绿**（run 1：B 27 PASS / **5 FAIL，5 条全在 F9 簇**——夹具尚未就位；run 2：B 27 PASS / 4 FAIL / 1 SKIP，**F9 专属 8 条全绿**，4 FAIL + 1 SKIP **全在 F8 继承簇**——F8 的夹具批次 11065 已被并发会话删除）；A 组 30 条本轮全绿。缺的只是"同一轮里 62 条一起绿"这一条记录。
+- **仪器与判别脚本仍是 `/tmp` 下的临时件、不入库**（同 F2–F8 惯例）：`/tmp/f9-cdp.mjs`（12 断言，零依赖 CDP）+ `/tmp/f9-mutation-check.mjs`（18 变异）+ `/tmp/f9-cdp-mutation.mjs`（3 页面级变异）+ `/tmp/f9-fixture.mjs`（夹具 prepare/reset/cleanup）+ `/tmp/f9-runb.sh`（带看门狗的低位窗口跑法）。
+- **观感判断只能人眼确认**（同 F3–F8）。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**
@@ -1259,6 +1373,7 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 2. **后端缺什么**：`GET /reservation/{id}` 仅允许本人（实测管理员访问他人预约 → `403 "无权查看该预约"`），没有管理端详情端点。
 3. **是否必须**：**不必须**——`GET /reservation/manage/page` 返回的 `ReservationVO` 已含设备名/实验室名/使用时段/状态/`quotaReleased`，足够核验。
 4. **推荐最小修改**：**无**。前端用列表行内抽屉展示，不新增端点。
+5. **【F9 结案】** F9 实测后确认**不需要**该端点：管理端预约列表的 `el-table` 行已含设备名/实验室名/使用时段/状态，**核验所需信息全在一行之内**，故 F9 做成"行内直接核验 + 二次确认"，**没有做抽屉**。D-5 关闭。
 
 **D-13 · 实验室列表被固定分页钳死，设备筛选的"实验室"下拉最多只能列 5 个**（**F3 实测发现**，即 G-F3-1）
 1. **页面需要什么**：`/equipment` 的"全部实验室"下拉需要**全部**实验室作选项，否则用户选不到第 6 个及以后的实验室。
@@ -1266,7 +1381,15 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 3. **是否必须**：**不必须**（当前数据完全够用），但属于"数据一涨就静默错"的类型，登记备查。
 4. **推荐最小修改**：给 `/laboratory/list` 的 Query DTO 加**可选** `pageSize`（服务层钳上限，如 ≤100），前端下拉传 `pageSize=100`。**纯增量参数，不改既有返回结构**。注意这与 D-6「所有分页固定 5 条/页」是同一根因的两面——D-6 建议不改（影响管理端观感），本条建议改（影响正确性）。
 
+**G-F9-1 · 管理端预约列表无法显示"预约人"姓名**（**F9 实测发现**）
+1. **页面需要什么**：管理员核验时想确认"是谁约的"。真实业务里这是核验前最该看的一列。
+2. **后端缺什么**：`ReservationVO` 只有 `userId`，**没有 `userName`/`nickName`**（实测：`GET /reservation/manage/page` 的每行都只有 `"userId":1`）。前端**没有任何字段**可渲染姓名，也无法自己补（管理端无权读任意用户资料的端点）。
+3. **是否必须**：**不必须**（`userId` 足以唯一确定预约人，核验动作本身不依赖姓名）。故 F9 如实把列名写成"**预约人 ID**"，**不伪造、不猜**。
+4. **推荐最小修改**：`ReservationMapper.xml` 的 `selectReservationPage` 多一句 `LEFT JOIN tb_user u ON u.id = r.user_id` 并在 `ReservationVO` 加 `nickName` 字段。**纯增量字段，不改既有返回结构**。注意这会多一次 join，但该查询已有 4 个 join（`batch`/`equipment`/`laboratory`），量级不变。**涉及后端，等批准。**
+
 ### C 类（仅登记，不建议改）
+
+**D-F9-3 · 学生端与管理端共用同一份 `ReservationStatus` 白名单**（**F9 实测发现**）：`utils/query.js:98` 的 `RESERVATION_STATUSES = ENUM_VALUES.ReservationStatus` **同时**被学生端 `buildReservationQuery` 与管理端 `buildManageReservationQuery` 引用，管理端筛选下拉的四个取值也来自它。**当前无误**（两端都该看到全部四个状态，且变异 M15 已锁住"管理端只收这四个"）。但**若将来学生端要收窄可见状态，管理端会跟着一起窄**，属于"改一处、错两处"的耦合。**建议不改**（当前无第二个消费者需求，提前拆分违反"不过度设计"）。
 
 **D-6 · 所有分页固定 5 条/页**：`SystemConstants.DEFAULT_PAGE_SIZE=5`，各 Query DTO 只有 `current` 没有 `pageSize`。管理端表格 5 行/页偏小。前端对策：**分页控件不提供"每页条数"选择器**。（若要改，最小方案是给 Query DTO 加 `pageSize` 并在服务层钳上限——**建议不改**。）
 

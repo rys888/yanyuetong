@@ -105,3 +105,23 @@ export function buildReservationQuery(query) {
     status: RESERVATION_STATUSES.includes(status) ? status : undefined,
   })
 }
+
+export function buildManageReservationQuery(query) {
+  const batchId = query?.batchId
+  const status = query?.status
+
+  return stripEmpty({
+    current: normalizeCurrent(query?.current),
+    batchId:
+      batchId != null && isNumericId(String(batchId))
+        ? String(batchId)
+        : undefined,
+    status: RESERVATION_STATUSES.includes(status) ? status : undefined,
+  })
+}
+
+export function hasActiveManageReservationFilter(params) {
+  return ['batchId', 'status'].some(
+    (key) => params?.[key] !== '' && params?.[key] !== undefined && params?.[key] !== null,
+  )
+}

@@ -279,15 +279,21 @@ async function verifyGroupA() {
 
     const sourceFiles = await collectSourceFiles(SRC_ROOT)
     const cancelLocations = []
+    const managePageLocations = []
+    const requestOrVerifyLocations = []
     for (const file of sourceFiles) {
       const source = await readFile(file, 'utf8')
       const relativePath = path.relative(FRONTEND_ROOT, file)
-      assert.doesNotMatch(source, /\/reservation\/manage\/page/, relativePath)
-      assert.doesNotMatch(
-        source,
-        /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/(?:request|verify)\b/,
-        relativePath,
+      const managePageMatches = source.match(/\/reservation\/manage\/page/g)
+      if (managePageMatches) {
+        managePageLocations.push(...managePageMatches.map(() => relativePath))
+      }
+      const requestOrVerifyMatches = source.match(
+        /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/(?:request|verify)\b/g,
       )
+      if (requestOrVerifyMatches) {
+        requestOrVerifyLocations.push(...requestOrVerifyMatches.map(() => relativePath))
+      }
       const cancelMatches = source.match(
         /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/cancel\b/g,
       )
@@ -295,6 +301,9 @@ async function verifyGroupA() {
         cancelLocations.push(...cancelMatches.map(() => relativePath))
       }
     }
+    assert.deepEqual(managePageLocations, ['src/api/reservation.js'])
+    assert.deepEqual(requestOrVerifyLocations, ['src/api/reservation.js'])
+    assert.match('/reservation/${id}/verify', /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/(?:request|verify)\b/)
     assert.deepEqual(cancelLocations, ['src/api/reservation.js'])
 
     const reservationNamedViews = (await collectSourceFiles(path.join(SRC_ROOT, 'views')))
@@ -302,6 +311,7 @@ async function verifyGroupA() {
       .map((file) => path.relative(FRONTEND_ROOT, file))
       .sort()
     assert.deepEqual(reservationNamedViews, [
+      'src/views/admin/reservation/AdminReservationListView.vue',
       'src/views/reservation/ReservationDetailView.vue',
       'src/views/reservation/ReservationListView.vue',
     ])
@@ -317,6 +327,7 @@ async function verifyGroupA() {
         ['batches', 'admin-batch-list'],
         ['equipment', 'admin-equipment-list'],
         ['laboratories', 'admin-laboratory-list'],
+        ['reservations', 'admin-reservation-list'],
       ].sort(),
     )
     assert.deepEqual(adminRoute?.meta?.roles, ['LAB_ADMIN'])
@@ -327,7 +338,7 @@ async function verifyGroupA() {
       .map((file) => path.relative(FRONTEND_ROOT, file))
     assert.ok(adminViews.length > 0, 'admin 视图目录不应为空')
     for (const file of adminViews) {
-      assert.doesNotMatch(file, /reservation|dlq/i, file)
+      assert.doesNotMatch(file, /dlq/i, file)
     }
   })
 
@@ -369,8 +380,13 @@ async function verifyGroupA() {
     for (const file of sourceFiles) {
       const fileSource = await readFile(file, 'utf8')
       const relativePath = path.relative(FRONTEND_ROOT, file)
-      assert.doesNotMatch(fileSource, /\/reservation\/manage\/page/, relativePath)
-      assert.doesNotMatch(fileSource, reservationVerifyPathPattern, relativePath)
+      if (relativePath === 'src/api/reservation.js') {
+        assert.match(fileSource, /\/reservation\/manage\/page/)
+        assert.match(fileSource, reservationVerifyPathPattern)
+      } else {
+        assert.doesNotMatch(fileSource, /\/reservation\/manage\/page/, relativePath)
+        assert.doesNotMatch(fileSource, reservationVerifyPathPattern, relativePath)
+      }
       assert.doesNotMatch(fileSource, /\/reservation-dlq/, relativePath)
     }
   })
