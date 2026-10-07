@@ -282,22 +282,33 @@ async function verifyGroupA() {
     )
 
     const sourceFiles = await collectSourceFiles(SRC_ROOT)
+    const cancelLocations = []
     for (const file of sourceFiles) {
       const source = await readFile(file, 'utf8')
       const relativePath = path.relative(FRONTEND_ROOT, file)
       assert.doesNotMatch(source, /\/reservation\/manage\/page/, relativePath)
       assert.doesNotMatch(
         source,
-        /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/(?:request|cancel|verify)\b/,
+        /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/(?:request|verify)\b/,
         relativePath,
       )
+      const cancelMatches = source.match(
+        /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/cancel\b/g,
+      )
+      if (cancelMatches) {
+        cancelLocations.push(...cancelMatches.map(() => relativePath))
+      }
     }
+    assert.deepEqual(cancelLocations, ['src/api/reservation.js'])
 
     const reservationNamedViews = (await collectSourceFiles(path.join(SRC_ROOT, 'views')))
       .filter((file) => /reservation/i.test(path.basename(file)))
       .map((file) => path.relative(FRONTEND_ROOT, file))
       .sort()
-    assert.deepEqual(reservationNamedViews, ['src/views/reservation/ReservationListView.vue'])
+    assert.deepEqual(reservationNamedViews, [
+      'src/views/reservation/ReservationDetailView.vue',
+      'src/views/reservation/ReservationListView.vue',
+    ])
   })
 
   await check('A', 'admin routes and views remain outside this phase', async () => {

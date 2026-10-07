@@ -2,6 +2,25 @@
   <section class="reservation-page">
     <PageHeader title="我的预约" />
 
+    <div class="filter-panel" aria-label="预约筛选">
+      <el-select
+        :model-value="params.status"
+        clearable
+        placeholder="全部状态"
+        @update:model-value="updateFilter('status', $event)"
+      >
+        <el-option
+          v-for="item in statusOptions"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        />
+      </el-select>
+      <div class="filter-actions">
+        <el-button @click="resetFilters">重置</el-button>
+      </div>
+    </div>
+
     <div v-loading="state === 'loading'" class="table-panel">
       <EmptyState v-if="state === 'error'" :title="`加载失败：${errorMessage}`">
         <template #action>
@@ -11,11 +30,14 @@
 
       <EmptyState
         v-else-if="state === 'ready' && records.length === 0"
-        title="你还没有预约记录"
+        :title="params.status ? '没有符合条件的预约记录' : '你还没有预约记录'"
       >
         <template #action>
-          <el-button type="primary" @click="router.push('/batches')">
-            去预约
+          <el-button
+            type="primary"
+            @click="params.status ? resetFilters() : router.push('/batches')"
+          >
+            {{ params.status ? '重置筛选' : '去预约' }}
           </el-button>
         </template>
       </EmptyState>
@@ -32,6 +54,11 @@
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
               <StatusTag enum-name="ReservationStatus" :value="row.status" />
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="90" align="center">
+            <template #default="{ row }">
+              <RouterLink :to="`/reservations/${row.id}`">详情</RouterLink>
             </template>
           </el-table-column>
         </el-table>
@@ -52,15 +79,16 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { fetchReservationPage } from '../../api/reservation.js'
 import EmptyState from '../../components/EmptyState.vue'
 import PageHeader from '../../components/PageHeader.vue'
 import StatusTag from '../../components/StatusTag.vue'
 import { PAGE_SIZE, lastPageOf } from '../../constants/pagination.js'
+import { resolveStatus } from '../../constants/statusMap.js'
 import { formatDateTime } from '../../utils/datetime.js'
-import { buildReservationQuery } from '../../utils/query.js'
+import { buildReservationQuery, RESERVATION_STATUSES } from '../../utils/query.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -69,6 +97,10 @@ const records = ref([])
 const total = ref(0)
 const errorMessage = ref('')
 const params = computed(() => buildReservationQuery(route.query))
+const statusOptions = RESERVATION_STATUSES.map((value) => ({
+  value,
+  label: resolveStatus('ReservationStatus', value).label,
+}))
 let requestSequence = 0
 
 async function load() {
@@ -76,7 +108,7 @@ async function load() {
   state.value = 'loading'
   errorMessage.value = ''
 
-  const result = await fetchReservationPage({ current: params.value.current })
+  const result = await fetchReservationPage(params.value)
   if (sequence !== requestSequence) {
     return
   }
@@ -108,6 +140,24 @@ async function load() {
   state.value = 'error'
 }
 
+function replaceFilters(changes) {
+  const query = { ...params.value, ...changes, current: '1' }
+  for (const key of Object.keys(query)) {
+    if (query[key] === '' || query[key] === undefined || query[key] === null) {
+      delete query[key]
+    }
+  }
+  router.replace({ query })
+}
+
+function updateFilter(key, value) {
+  replaceFilters({ [key]: value })
+}
+
+function resetFilters() {
+  router.replace({ query: {} })
+}
+
 function changePage(page) {
   router.replace({ query: { ...route.query, current: String(page) } })
 }
@@ -116,6 +166,21 @@ watch(() => route.query, load, { immediate: true })
 </script>
 
 <style scoped>
+.filter-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.filter-actions {
+  display: flex;
+}
+
 .table-panel {
   min-height: 300px;
   padding: 18px;
@@ -130,6 +195,15 @@ watch(() => route.query, load, { immediate: true })
 }
 
 @media (max-width: 760px) {
+  .filter-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-actions,
+  .filter-actions :deep(.el-button) {
+    flex: 1;
+  }
+
   .pagination {
     justify-content: center;
   }

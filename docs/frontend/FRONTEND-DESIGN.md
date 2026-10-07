@@ -943,6 +943,85 @@ M7 是这轮最该测的一条：它证明「禁止数值化」这条精度约�
 
 ---
 
+### F6 验收实测记录（2026-10-07，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain` 恰好 **7 项 = 6 修改 + 1 新增**（改：`scripts/verify-batch.mjs`、`scripts/verify-reservation.mjs`、`src/api/reservation.js`、`src/router/routes.js`、`src/utils/query.js`、`src/views/reservation/ReservationListView.vue`；增：`src/views/reservation/ReservationDetailView.vue`）。F6 在 §9 划定的 `views/reservation/*`（学生侧）范围内，**未越界到管理端**。
+
+**后端零接触**：`git status --porcelain` 里没有任何后端路径。`ReservationDetailView.vue` 复用 F5 已有的 `api/reservation.js`，只新增一个 `cancelReservation(id)`——**没有为前端方便新增或改写任何后端接口**。
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `node scripts/verify-reservation.mjs` | **32 PASS / 0 FAIL / exit 0** | F5 原 23 条**一条未删未改**，新增 9 条（8 条 F6 + 1 条 Review 返工） |
+| **浏览器仪器（F6，20 条断言）** | **20 PASS / 0 FAIL** | CDP 直连，覆盖筛选/详情/取消/刷新持久化 |
+| `npm run check:batch` | **A 组 13 PASS / 0 FAIL / 0 SKIP**；总计 13 PASS / 0 FAIL / 9 SKIP | A 组条数与 F5 持平，**无断言丢失**；B/C 因本轮未提供 `VERIFY_TOKEN` 跳过 |
+| `npm run check:request` | **22 PASS / 0 FAIL** | 含 `statusMap exactly matches the approved labels, tags, and actions`——F6 未偷改状态表 |
+| `npm run check:session` | **24 PASS / 0 FAIL** | 未回归 |
+| `npm run check:browse` | **19 PASS / 0 FAIL** | 未回归 |
+| `npm run build` | **exit 0**，283 ms | 仅既存大 chunk 警告 |
+| 控制台噪音扫描（仪器走遍全部路径） | **非 favicon 噪音 0 条** | 本轮无刻意挑起的错误码，**无需任何豁免** |
+
+#### §10 判据 ①–⑤ 的落点
+
+| 判据 | 落点与实测证据 |
+|---|---|
+| ① 列表只出现**自己**的预约 | 这是**后端保证**（`queryMyPage` 从 token 取 userId），前端**没有任何参数可以传别人的 id**，故前端侧不存在越权路径。前端证据：仪器 `1d`（筛选「已预约」后 4 行状态列全为「已预约」）、`4b`（筛选「已取消」查到该记录且全为该状态） |
+| ② 详情页字段与 `GET /reservation/{id}` 一致 | 仪器 `2c` 实测渲染出 **8 个字段**：预约编号/设备/所属实验室/状态/使用时段/预约开放窗口/创建时间/更新时间（`设备=超速离心机`、`所属实验室=计算与样品制备中心`、`状态=已预约`）。静态锁：`verify-reservation.mjs` 的 10 字段循环断言（含 `startTime`/`endTime`/`bookingStartTime`/`bookingEndTime`/`createTime`/`updateTime`）。注：未展示 `userId`/`quotaReleased`（内部字段）与 `batchId`（VO 无 `equipmentId`，且管理端详情见 **D-5**） |
+| ③ 取消前二次确认，取消后**重新拉取**并显示 CANCELLED | 仪器 `3b` **确认前 POST 数为 0**（先弹窗、未提前发请求）→ `3c` 确认后**恰好 1 次** `POST /reservation/{id}/cancel` → `3d` **重新拉取** `GET /reservation/{id}` → `3e` 终态显示「已取消」→ `4a` **刷新页面仍是「已取消」**（状态真已持久化，非本地乐观更新）。仪器 `2a/2b` 另证 18 位 id 进 URL 与上屏均**逐字节未数值化** |
+| ④ 对已取消记录再取消 → 200 幂等，页面**通过重取**显示已取消，**不得显示「取消成功」** | **API 级实测**：对已取消记录再 `POST …/cancel` → **HTTP 200 `{"success":true}`**，复查仍 `CANCELLED` 且 `quotaReleased=True`（名额**未被二次归还**）。这正是判据④的机理根据：`TRANSITIONED` 与 `ALREADY_CANCELLED` 的 200 **响应体完全同形、不可区分**，所以 200 不能作为"本次发生迁移"的凭据。UI 级：仪器 `3f` 以 **60ms 间隔全程采样**，**从未出现「取消成功」**，同时 `3e` **正向**确认显示「已取消」（否定式断言与正向前提同 check 合取，不会在坏页上空转）。静态锁三条：`doesNotMatch(/取消成功/)`、`doesNotMatch(/\bstatus\s*===/)`、`actions.includes('cancel')` |
+| ⑤ 越权访问他人预约 id → 403 且有 `errorMsg` | **API 级实测**（§10 人工流程要求的手工请求）：用**另一个账号**（管理员）的 token —— `GET /reservation/{id}` → **403 `无权查看该预约`**；`POST …/cancel` → **403 `无权取消该预约`**，两者均带 `errorMsg`。前端侧：`denied` 通道 → `errorMessage.value = result.message` → `EmptyState` **原样展示后端文案**。注意后端对「不存在」与「不是你的」返回**同一个** 403（无 404），故详情页**不得**自造"该预约不存在"这类文案 |
+
+#### 仪器自身的坑（第 6 个，同类于 F5 记录的第 3 条）
+
+我的 CDP 仪器**第一版**把 `设备`/`状态` 判为"未渲染"（`2c` 红）。但提取到的字段是 `{预约编号, 所属实验室, 使用时段, 创建时间}`——**恰好是每个 `<tr>` 的第 1 对**。根因：`el-descriptions :column="2"` 让**每个 `<tr>` 容纳两对** label/content，而我的提取器每行只取第一个 `querySelector`，于是 4 个 `tr` 各丢一对，正好丢掉 设备/状态/预约开放窗口/更新时间。改成按下标配对遍历后 **20 PASS / 0 FAIL**。**又一次：应用是对的，仪器错了。**
+
+#### 证伪实验（10 个变异，复原后逐字节一致）
+
+**第一轮：9 个变异，打在生产文件上（`ReservationDetailView.vue` / `ReservationListView.vue` / `query.js` / `routes.js`），9/9 被抓**
+
+| 变异 | 改坏什么 | 变红断言 |
+|---|---|---|
+| N1 | `canCancel` 改用 `status === 'RESERVED'` 字面量 | `reservation cancellation is action-driven and always refetches after 2xx` |
+| N2 | 2xx 后**不重取**、改弹「取消成功」 | 同上 |
+| N3 | 详情链接 `Number(row.id)` | `reservation list detail link preserves the row id string` + `reservation ids are never numerically coerced in F6 views` |
+| N4 | builder 内联 `ENUM_VALUES` 绕开单点来源 | `reservation status whitelist is the exact enum source of truth` |
+| N5 | 详情路由**偷偷加上 `menu`** | `reservation route registers a menu-less detail page` |
+| N6 | 详情页**丢弃 `updateTime`** | `reservation detail renders all readable VO fields and guarded empty states` |
+| N8 | **删掉 `isNumericId` 前置守卫** | 同上 |
+| N9 | 在视图里**再抄一份** `/reservation/{id}/cancel` | `[A] reservation submit API is exact and later-phase calls remain absent` |
+| N10 | **新增第三个 reservation 视图**（模拟 F7/F9 越界） | 同上 |
+
+N2 是这轮最该测的一条：它证明「200 不得当成功凭据」**真的被断言锁住**，而不是只写在注释里的口号。N9/N10 证明收紧后的边界锁有实效——**若照 F5 原样保留禁止集，N9 会漏网**。
+
+**第二轮：1 个变异，打在生产文件上，1/1 被抓**（复核 Review 返工是否真落地）
+
+| 变异 | 改坏什么 | 变红断言 |
+|---|---|---|
+| N11 | 取消失败透传改成硬编码 `ElMessage.error('取消失败')` | `reservation cancel failure surfaces the backend message verbatim` |
+
+复原一律用 `cp` 快照 + `shasum -a 256` 校验（**不用 `git checkout`**——本次 F6 改动全部未暂存，从索引恢复会把整个 F6 抹掉）。
+
+#### 边界改法：F6 **合法击穿** F5 两条越界防护，收紧而非删除
+
+F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，恰好命中 F5 立下的两条越界防护。**这类"后续 Phase 合法失效既有断言"的处理方式，是 F5 的 R5 教训的直接复用**：
+
+1. 禁止集 `/reservation/{id}/(request|cancel|verify)` **缩窄为** `(request|verify)`——`cancel` 归 F6 合法范围，`verify` 留给 F9、`request` 是 **D-3** 未批准项。
+2. **新增收紧**：`/reservation/{id}/cancel` 在全仓**恰好出现 1 处**且只在 `api/reservation.js`（单点来源锁，防视图里再抄一份——即 N9）。
+3. `reservationNamedViews` 从 1 个文件改为**恰为 2 个**（排序后精确集合相等），**没有退化成"包含"**——否则 F7/F9 悄悄加管理端预约视图时不会被发现（即 N10）。
+
+#### Review 发现的问题（1 项，已返工并由 N11 复核）
+
+1. **R1 · 取消失败的文案透传无任何覆盖**：`ElMessage.error(result.message)` 既无静态断言、**也在全新环境里不可达**（理由见下"迄今仍未覆盖"），把 `result.message` 换成硬编码 `'取消失败'` **不会有任何东西变红**，后端那条 400 文案会静默丢失。已新增一条 check，**正向锁 `ElMessage.error(result.message)` + 同一 check 内负向排除字符串字面量**（否定式必须与正向前提合取，否则在坏页上空转）。
+
+#### 迄今仍未覆盖
+
+- **取消路径的两条 400 在全新环境里时间上不可达**，只做静态锁。这**不是测试没做，而是后端窗口不变量的必然结果**：实测 `publish` 报 `预约截止时间不能晚于使用开始时间`，即 `bookingEndTime ≤ startTime ≤ endTime`；而能**提交**预约又要求 `now < bookingEndTime`，故预约成功那一刻必有 `now < startTime`（→ 管理员核验必回 `预约尚未开始，无法核验`，已实测 400）且 `now < endTime`。**所以 `当前状态不可取消`（COMPLETED/NO_SHOW）与 `预约已结束，无法取消` 只能靠真实时间流逝或直接改库触发。**
+- **判据①是后端保证**，前端无从越权（没有传别人 userId 的参数），故只有"筛选结果与状态自洽"这类间接证据。
+- **`check:batch` 的 B/C 组本轮 SKIP**（未提供 `VERIFY_TOKEN`）。静态 A 组已全绿；F5 记录里的 B/C（真机 token + OPEN fixture）仍是最近一次真机结论。**这是本轮的覆盖边界，不是已通过。**
+- **浏览器仪器与 fixture 仍是 `/tmp` 下的临时件、不入库**（同 F2/F3/F4/F5 惯例）：`/tmp/f6-cdp-verify.mjs`（20 断言，零依赖 CDP）+ 复用 `/tmp/f5-fixture.sh`。
+- **观感判断只能人眼确认**（同 F3/F4/F5）；**D-2**（`mine` 查询参数与 `adminUserId`，影响 F7）、**D-5**（管理员无法查看单个预约详情——学生侧详情页已证明用 `GET /reservation/{id}` 足够，管理端 F9 建议同样走行内抽屉而非新增端点）、**D-13**（`/laboratory/list` 被钳 5 条）继续挂账。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**

@@ -65,6 +65,12 @@ export const routes = [
         component: () => import('../views/reservation/ReservationListView.vue'),
         meta: { title: '我的预约', menu: { title: '我的预约', icon: 'Tickets', order: 5 } },
       },
+      {
+        path: 'reservations/:id',
+        name: 'reservation-detail',
+        component: () => import('../views/reservation/ReservationDetailView.vue'),
+        meta: { title: '预约详情' },
+      },
     ],
   },
   {
