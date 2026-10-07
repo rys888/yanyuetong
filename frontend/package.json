@@ -10,7 +10,8 @@
     "check:request": "node scripts/verify-request-layer.mjs",
     "check:session": "node scripts/verify-session.mjs",
     "check:browse": "node scripts/verify-browse.mjs",
-    "check:batch": "node scripts/verify-batch.mjs"
+    "check:batch": "node scripts/verify-batch.mjs",
+    "check:reservation": "node scripts/verify-reservation.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "2.3.2",

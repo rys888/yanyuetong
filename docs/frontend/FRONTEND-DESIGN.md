@@ -870,6 +870,79 @@ F4 的浏览器层判据被拆成两支仪器，原因是**判据 21 的前后�
 
 ---
 
+### F5 验收实测记录（2026-10-07，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain -uall -- frontend` 恰好 **9 项 = 5 修改 + 4 新增**（改：`package.json`、`scripts/verify-batch.mjs`、`router/routes.js`、`utils/query.js`、`views/batch/BatchDetailView.vue`；增：`api/reservation.js`、`views/batch/SubmitResult.vue`、`views/reservation/ReservationListView.vue`、`scripts/verify-reservation.mjs`）。
+
+**其中 `views/reservation/ReservationListView.vue` 是 §9 表里划给 F6 的文件**——这是**经用户明确批准的 F5 边界扩大**，不是越界：判据⑤与⑥都依赖「我的预约」页面（⑤要引导过去、⑥要确认记录可见），而该页是 F6 的交付物。批准的范围**严格限定为最小只读列表**（4 列 + 分页 + 空态 + 越界页自愈），**状态筛选、详情、取消全部留给 F6**。F6 因此只需在此基础上做增量（筛选/详情/取消），不必重写。同类先例：F2 的 `AdminHomeView.vue` 占位页。
+
+**后端零接触**：`git status --porcelain -- src pom.xml README.md` **为空**（该命令在写本记录之前跑；复跑时请把 `docs/` 排除，本文件自身的改动是记录写入，不是 Codex 的改动）。`package.json` 只多一行 `check:reservation`，依赖逐字节未变。
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `node scripts/verify-reservation.mjs` | **23 PASS / 0 FAIL / exit 0** | 走**真 socket**路径（输出无降级 `INFO:` 行） |
+| **浏览器仪器（F5，24 条断言）** | **24 PASS / 0 FAIL** | CDP 直连，覆盖提交/轮询/终态/列表/400 分支 |
+| `npm run check:batch`（真机 token + OPEN fixture 11005） | **22 PASS / 0 FAIL / 0 SKIP** | A 13 + B 6 + **C 3 不再是 SKIP** |
+| `npm run check:browse`（F3，学生 token） | **37 PASS / 0 FAIL** | F3 未回归 |
+| `npm run build` | **exit 0**，258 ms | 仅既存大 chunk 警告 |
+| 控制台噪音扫描（仪器走遍全部路径） | **非 favicon 噪音 0 条** | 见下「仪器自身的坑」第 3 条 |
+
+#### §10 判据 ①–⑦ 的落点
+
+| 判据 | 落点与实测证据 |
+|---|---|
+| ① 提交后按钮 loading 且不可重复点击 | 仪器组 2：双击（60ms 间隔）后 `2a` 第一次点击命中、`2b` 60ms 后 `disabled=true`、`2c` 第二次点击**被守卫拦下未产生交互**、`2d` 全程**恰好 1 次** `POST /reservation`。另有 verify-batch A 组静态锁 `submit availability comes only from BookingState actions` |
+| ② ≤10s 内给终态 | 仪器 `4c` settled=true，`4d` 终态为「预约成功」、`4e` 进行中文案已消失。实测窗口仍是**几十毫秒级**，10s 是安全余量 |
+| ③ 轮询遇 403 继续重试 | **本轮最强证据**：仪器捕获轮询状态序列 **`[403, 200]`**——即首次轮询真的吃到了 403（`无权查看该预约`，行尚未落库）后**继续轮询**，第二次才 200 终结。这把「denied 重试」从纸面断言变成了**观测到的事实**，同时反证 **「首次轮询必须立即发起」是承重设计**：若首次等待 500ms，序列只会剩 `[200]`，该分支成为永不可达的死代码 |
+| ④ 400 直接展示后端中文 `errorMsg` | 仪器组 6：重复提交 → `6a` 实测 **400**、`6b` 面板显示「预约失败」、`6c` 原样透出 **「你已预约过该批次」**、`6d` 该分支**不提供重试按钮**（`action=none`） |
+| ⑤ 503 两种文案分别提示 | **分类层验证**（未端到端挑起，理由见「迄今仍未覆盖」）：`verify-reservation.mjs` 的 11 例分类表覆盖 `预约失败，请重试 → action=retry`、`预约结果待确认，请稍后查询 → action=mine`，以及**未知 503 保守归入 mine**。代码级证据：三个抛出点在 `ReservationServiceImpl.java:114 / :311 / :328`，**全部在 `return reservationId` 之前** → 503 时前端拿不到 id，这正是判据⑤只能引导「我的预约」而不能轮询的根因（**D-4 由此从推测变为确证**） |
+| ⑥ 成功后「我的预约」能看到该记录 | 仪器组 5：第 1 页渲染出记录行，首行为新预约（`ORDER BY r.id DESC`），设备名与状态列「已预约」均正确 |
+| ⑦ `reservationId` 未被精度破坏 | 仪器 `3a` 后端 data 为**字符串且 18 位**、`3b` **轮询 URL 里的 id 与后端字符串逐字节一致**（数值化会变成 `…740`）、`3c` **终态面板展示的编号与后端 id 逐字节一致**（实测 `645888915823132677`）。三者串成完整精度链 |
+
+#### 一个仪器自身的坑（值得单独记）
+
+我的 CDP 仪器**第一版**用裸 `JSON.parse` 读 POST 响应体，把 18 位 id 读成 `645881622968664000`（超过 `2^53` 被静默截断），于是**把应用正确的字符串精度误判为缺陷**（3a/3b/3c 三条齐红）。换成与应用同一个 `json-bigint({storeAsString:true})` 后才对齐——**应用是对的，仪器错了**。这反过来证明 F1 那层 bigint 处理是承重的：任何绕过它的读取路径都会立刻暴露精度损失。另有两个仪器自身错误：主操作按钮文案是**「立即预约」**而非「提交预约」（导致首轮 18 条假红）；浏览器会把刻意挑起的 403/400 记成 `Failed to load resource` 控制台错误，处置是**只放行这两个已预期状态码**，其余任何状态码与任何非 resource-load 报错仍计噪音（不搞一刀切豁免）。
+
+#### 证伪实验（7 个变异，复原后 `shasum -a 256 -c` 逐字节一致）
+
+**第一轮：复核返工是否真落地（打在生产文件 `BatchDetailView.vue`，4/4 被抓）**
+
+| 变异 | 改坏什么 | 变红断言 |
+|---|---|---|
+| M1 | 从 `:disabled` 表达式里**删掉** `submitting` | `submit availability comes only from BookingState actions` |
+| M2 | 往 `:disabled` 表达式里**再加**第三个条件 | 同上（锚定 `$` + token 集合 `deepEqual` 两个方向都拦） |
+| M3 | 在视图里**重新抄回** 503 文案常量 | `503 messages have one exported API source of truth` |
+| M4 | **删掉** `if (!result.data)` 分支 | `an ok polling result without data uses the pending exit` |
+
+**第二轮：复核终态编号（打在 `SubmitResult.vue`，3/3 被抓）**
+
+| 变异 | 改坏什么 | 变红断言 |
+|---|---|---|
+| M5 | 编号**写死成常量字符串** | `done result keeps the exact reservation id visible` |
+| M6 | 把编号项**从首位挪到设备之后** | 同上 |
+| M7 | 编号**被数值化** `{{ Number(reservationId) }}` | 同上 |
+
+M7 是这轮最该测的一条：它证明「禁止数值化」这条精度约束**真的被断言锁住**，而不是只写在注释里的口号。
+
+#### Review 发现的问题（两轮，均已返工并由上述变异复核）
+
+1. **R1 · 503 文案有两个来源**（`api/reservation.js` 与 `BatchDetailView.vue` 各定义一份）：视图那份管生产、仪器那份管测试，**漂移时两边永远一致地错**。已收敛为视图侧完全删除、由 API 层单点导出。
+2. **R2 · `ok` 但 `data` 为空时落进死路**：面板无文案无按钮。已改走 `finishAsPending(sequence)`，与 `pending` 相合流。
+3. **R3 · `Number(route.params.id)` 语义易被误读**为预约 id。已就地加注释说明此处数值化的是 `batchId`（AUTO 小整数），`reservationId` 必须全程保持字符串。
+4. **R5 · 三条 F4 断言被合法失效后需重写**：F5 新增 `api/reservation.js` 确实让 `/reservation` 字面量从 1 处变 2 处，但**不能因此把断言删弱**。已重写为：`submitReservation` 形状正则 + `/reservation` 字面量**恰为 1 处** + 全仓禁止 `/reservation/manage/page` 与 `/reservation/{id}/(request|cancel|verify)` + **`/admin` 子路由仍仅 `admin-home`**（F7 边界未被 F5 侵蚀）。
+5. **R6 · 预约编号在任何时刻都看不见**：`accepted|polling` 相显示编号但在屏仅 46–114ms，`done` 相不显示，`ReservationListView` 的 4 列里也没有 → 用户**全程看不到自己的编号**。经用户裁定**并入 F5 补上**：`done` 面板首位新增 `预约编号` 行，绑定原样字符串。附带收益是判据⑦从"只存在于百毫秒窗口"变为**终态可确定性核验**（仪器 `3c`）。
+
+#### 迄今仍未覆盖
+
+- **503 未端到端挑起**，只在分类层验证。理由：`:311` 需要「消息**确定未投递**」、`:328` 需要「投递结果**不确定**」，二者都要求对 MQ 制造特定故障态，无法在不破坏本机验证环境的前提下确定性复现；§10 F5 的人工测试流程本身也只要求「观察结果面板」，未要求挑起 503。**这是覆盖边界，不是已通过。**
+- **「名额已约满」400 未端到端复现**。它是并发竞态下的补偿路径：剩余名额为 0 时 `bookingState` 已使按钮禁用，正常 UI 路径到不了。不过它与「你已预约过该批次」**共用同一条 400 处理路径**（后端文案透传），后者已由仪器组 6 端到端验证。
+- **`check:batch` 的 C 组只接受 OPEN 前提**：我误传 NOT_STARTED 的 11006 时它如实报 `'NOT_STARTED' !== 'OPEN'`。这是**仪器在拒绝错误前置条件**，同时反证 C 组断言不是空转的（它真去后端取 `bookingState` 比对）。
+- **fixture 不能连跑同一设备**：后端「同一设备的使用时段不能重叠」会正确拒绝（`ReservationBatchServiceImpl` 的重叠校验只排除 `CANCELLED`，`DRAFT`/`PUBLISHED`/`CLOSED` 全都参与——同 F4 记录第 9 条）。故 F5 的 fixture 脚本把**使用时段随机推到 30~330 天后**（预约开放窗口仍覆盖当前时刻以保 `OPEN`），使脚本可重复运行。
+- **浏览器仪器仍是 `/tmp` 下的临时件、不入库**（同 F2/F3/F4 惯例）：`/tmp/f5-cdp-verify.mjs`（24 断言，零依赖 CDP）+ `/tmp/f5-fixture.sh`（可重复运行的 OPEN 批次 fixture）。
+- **观感判断只能人眼确认**（同 F3/F4）；**D-2**（`mine` 查询参数与 `adminUserId`，影响 F7）与 **D-13**（`/laboratory/list` 被钳 5 条，仍潜伏）继续挂账。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**

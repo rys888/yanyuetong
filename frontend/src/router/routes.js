@@ -59,6 +59,12 @@ export const routes = [
         component: () => import('../views/batch/BatchDetailView.vue'),
         meta: { title: '批次详情' },
       },
+      {
+        path: 'reservations',
+        name: 'reservation-list',
+        component: () => import('../views/reservation/ReservationListView.vue'),
+        meta: { title: '我的预约', menu: { title: '我的预约', icon: 'Tickets', order: 5 } },
+      },
     ],
   },
   {

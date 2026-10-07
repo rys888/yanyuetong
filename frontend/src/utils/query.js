@@ -72,3 +72,12 @@ export function hasActiveBatchFilter(params) {
     (key) => params?.[key] !== '' && params?.[key] !== undefined && params?.[key] !== null,
   )
 }
+
+export function buildReservationQuery(query) {
+  const status = query?.status
+
+  return stripEmpty({
+    current: normalizeCurrent(query?.current),
+    status: ENUM_VALUES.ReservationStatus.includes(status) ? status : undefined,
+  })
+}
