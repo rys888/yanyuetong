@@ -1,7 +1,7 @@
 <template>
   <section class="placeholder-card" aria-labelledby="admin-home-title">
     <h1 id="admin-home-title">管理首页</h1>
-    <p class="phase-note">管理端业务功能将在 F7 实现。</p>
+    <p class="phase-note">在这里维护我的实验室与我的设备。</p>
 
     <dl class="identity-list">
       <div>

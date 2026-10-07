@@ -614,6 +614,22 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 
 **F2 的唯一跨 Phase 耦合点（Review 时重点看）**：`api/request.js` 的 `getToken` 要从 F1 的 `() => null` 换成读 Pinia，于是形成循环导入 `stores/user.js → api/user.js → api/request.js → stores/user.js`。安全条件是**只在 `getToken` 的函数体内读 store**、不得在模块顶层解构（ESM 循环里顶层解构会拿到 TDZ 绑定）。**同时禁止** `api/request.js` 直接 import `router` —— 401 跳转改为由 `main.js` 注入 handler，否则循环会绕回路由层。
 
+**F7 相对本表的七处设计决定（派发前记录，非事后追认）**：
+
+① **D-2 的裁决：不动后端。** 用户裁定 F7 为**纯前端 Phase**，按 §10 判据⑤ 执行 —— 管理端列表**照常展示后端返回的全部行**，不做任何前端归属过滤或归属判断（`LaboratoryVO` 与 `EquipmentVO` 都拿不到 `adminUserId`，前端**没有**做归属判断的输入）；越权由**后端 403 文案**兜底并在页面上原样展示。**D-2 继续挂账**，不在本 Phase 解决。这条与 §5 既有的那句「不在前端做 ownership 判断」是同一决定，此处只是把它落成 F7 的实现约束。
+
+② **判据②的验证边界必须如实登记。** 判据②写的是"新建实验室成功且创建者成为负责人"，但 `LaboratoryVO` 不含 `adminUserId`，**前端无法直接验证归属**。前端能验证的只有"创建成功 + 重取后列表出现新行"。为拿到**判别性**证据，真机脚本改为：创建后**立刻 `PUT /laboratory`** —— 服务层 `updateLaboratory` 会先 `assertManageable`，若创建者不是负责人这里必然是 403 而不是 200。**这是间接证据，验收记录里必须写明"间接"，不得声称前端直接验过。**
+
+③ **写操作 2xx 后一律重新拉取列表，不做本地乐观更新。** 这是把 F6「200 不得当成功凭据」的教训**强制推广**到 CRUD：后端 `deleteLaboratory`/`deleteEquipment` 都忽略 `removeById` 的返回值，理论上 0 行受影响也返回 `Result.ok()`（与 F6 的 `TRANSITIONED`/`ALREADY_CANCELLED` 同构）。重取使列表恒为服务端真值，成功提示与列表若矛盾会立刻暴露。成功文案用中性词（`已创建`/`已保存`/`已删除`），**不写"操作成功"这类无法证伪的措辞**。
+
+④ **写失败时对话框保持打开。** 关掉会让用户丢掉已填内容；后端 400（如删除仍有设备的实验室）应当在表单仍可见的情况下展示文案。
+
+⑤ **设备状态切换由 `statusMap` 的 actions 驱动，目标状态只能来自一张静态映射表。** `statusMap.EquipmentStatus` 已定义好三个取值的 `actions`（`AVAILABLE:['maintain','disable']` 等），F7 为动作名建一张 `动作 → 目标状态` 映射表，页面按 `actions` 渲染按钮。**这样判据⑥（"非法值不会由前端发出"）就是结构性成立的**：目标值不可能来自映射表以外的地方，而映射表的每个值被静态断言锁死在 `ENUM_VALUES.EquipmentStatus` 内。**不用行内硬编码按钮**，也不用给设备状态在表单里再开一个下拉（状态切换是行内动作，与实验室用表单改 `status` 的分工不同 —— 因为 `LaboratoryStatus` 的 `actions` 全是空数组，没有动作语义可用）。
+
+⑥ **编辑设备时实验室下拉 = 前 5 条 ∪ 当前行的实验室。** 后端 `/laboratory/list` 页大小被硬钳在 5（§11 D-13），若只喂前 5 条，编辑第 6 个及以后实验室的设备时 `el-select` 会显示裸 id。补入当前行是为了让**编辑路径不因 D-13 而静默错显**；D-13 本身仍挂账。**同时**：暴露 `laboratoryId` 的编辑入口意味着"把设备搬进别人的实验室"可被触发 → 后端 403 `无权管理该实验室` → 页面原样展示，这**正好**是判据⑤的展示面之一，不是副作用。
+
+⑦ **`verify-batch.mjs` 那条 `admin routes and views remain outside this phase` 断言被 F7 合法击穿，处理方式是"收紧"而非删除。** 它原本断言两件事：`/admin` 的子路由恰好是 `[['', 'admin-home']]`；且 `frontend/src/views/admin` 的 `git status` 为空。前者 F7 必然破坏（要加两条路由），后者更荒谬 —— **F7 就是这个目录的 owner，留着它等于断言 F7 不许做自己**。改法：把语义从"管理端整体尚未实现"收紧为"**F8/F9/F10 的管理端域尚未越界**" —— 子路由白名单从 1 项**精确**更新为 3 项（仍是深等白名单，不是"非空即可"），`git status` 那条**替换**为"`src/views/admin/**` 下不存在文件名匹配 `/batch|reservation|dlq/i` 的文件"。**一条换一条，A 组条数维持 13 不变**（与 F5 的 R5、F6 的同类先例一致：边界改法只能收紧、不能靠删除断言来"通过"）。
+
 ---
 
 ## 10. 每个 Phase 的验收标准与人工测试流程
@@ -1019,6 +1035,88 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 - **`check:batch` 的 B/C 组本轮 SKIP**（未提供 `VERIFY_TOKEN`）。静态 A 组已全绿；F5 记录里的 B/C（真机 token + OPEN fixture）仍是最近一次真机结论。**这是本轮的覆盖边界，不是已通过。**
 - **浏览器仪器与 fixture 仍是 `/tmp` 下的临时件、不入库**（同 F2/F3/F4/F5 惯例）：`/tmp/f6-cdp-verify.mjs`（20 断言，零依赖 CDP）+ 复用 `/tmp/f5-fixture.sh`。
 - **观感判断只能人眼确认**（同 F3/F4/F5）；**D-2**（`mine` 查询参数与 `adminUserId`，影响 F7）、**D-5**（管理员无法查看单个预约详情——学生侧详情页已证明用 `GET /reservation/{id}` 足够，管理端 F9 建议同样走行内抽屉而非新增端点）、**D-13**（`/laboratory/list` 被钳 5 条）继续挂账。
+
+---
+
+### F7 验收实测记录（2026-10-07，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain` 共 11 项，其中 **7 修改 + 3 新增 = 10 项属 F7**（改：`docs/frontend/FRONTEND-DESIGN.md`、`frontend/package.json`、`frontend/scripts/verify-batch.mjs`、`frontend/src/api/equipment.js`、`frontend/src/api/laboratory.js`、`frontend/src/router/routes.js`、`frontend/src/views/admin/AdminHomeView.vue`；增：`frontend/scripts/verify-admin.mjs`、`frontend/src/views/admin/equipment/`、`frontend/src/views/admin/laboratory/`）。第 11 项 `docs/study/` **与 F7 无关、且是凭据地雷**，提交时必须逐条显式列路径排除（**绝不能用 `git add -A`**）。
+
+**后端零接触**：`git status --porcelain` 中无任何后端路径（无 `src/main`、无 `.java`、无 `pom.xml`）。判据②③⑤所依赖的"后端已具备的能力"**全部是既有实现**——F7 只新增/补齐了前端侧的调用与 UI。
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `node scripts/verify-admin.mjs`（带真实后端） | **A 11 PASS + B 8 PASS / 0 FAIL / 0 SKIP（合计 19）** | F7 新增仪器 |
+| **浏览器仪器（F7，19 断言）** | **19 PASS / 0 FAIL / 0 崩溃** | CDP 直连 5176，六段全跑完 |
+| `npm run check:batch` | **A 组 13 PASS / 0 FAIL** | A 组条数与 F6 持平，**无断言丢失**（被击穿那条为"收紧"而非删除，见下） |
+| `npm run check:browse` | **19 PASS / 0 FAIL** | 未回归 |
+| `npm run check:reservation` | **32 PASS / 0 FAIL** | 未回归 |
+| `npm run check:request` | **22 PASS / 0 FAIL** | F7 未偷改状态表 |
+| `npm run check:session` | **24 PASS / 0 FAIL** | 未回归 |
+| `npm run build` | **exit 0**，269 ms | 两个新页面各自懒加载分包；仅既存大 chunk 警告 |
+| 控制台噪音扫描 | **非 favicon 噪音 0 条** | 无需任何豁免 |
+| DB 复核 | **4 实验室 / 12 设备 / 0 孤儿 / 0 残留夹具** | 设备 9 状态已复原为 `AVAILABLE` |
+
+#### §10 判据 ①–⑥ 的落点
+
+| 判据 | 落点与实测证据 |
+|---|---|
+| ① 管理端菜单由角色驱动 | 仪器 `1a`：LAB_ADMIN 菜单**恰好**是 `["管理首页","我的实验室","我的设备"]`（集合并列相等，不是"包含"）。路由侧：`/admin` 带 `meta.roles: ['LAB_ADMIN']`，两条新子路由**不带 `meta.roles`**、继承父级；`AdminLayout` 菜单由 `router.getRoutes()` 扫描 `meta.menu` 生成，故**加路由即自动加菜单**，未改 Layout。后端侧：USER 身份对 6 个管理端写接口（`POST/PUT/DELETE /laboratory`、`POST /equipment`、`PUT /equipment/{id}/status`、`DELETE /equipment/{id}`）**全部 403**——前端权限只是 UI 控制，真边界是后端 `RoleInterceptor` |
+| ② 管理员只能改自己负责的实验室 | **这条前端验不了，必须在 DB 侧验，如实登记。** 根因是 **D-2**：`LaboratoryVO` 不含 `adminUserId`，前端**没有任何字段**可判归属。DB 侧直接证据：token 持有者 = `id=1016, role=LAB_ADMIN`，`tb_laboratory.admin_user_id` 显示其实验室为 `1,2`（另 `3,4` 属 `1019`）。**间接证据（仪器 B2）**：新建实验室后**立即 PUT 成功** ⇒ 已通过 `assertManageable`；**B5**：改实验室 4 的设备状态 → 403 `无权管理该实验室`（仪器 `3b` 复现同一文案） |
+| ③ 删除仍有设备的实验室被拒 + 展示后端文案 | **仪器 `2d` 端到端实测**：点「删除」→ 二次确认 → 页面展示 **`该实验室下仍有 3 台设备，请先转移或删除设备`**（后端 `BadRequestException`）。`2e`：删除被拒后**重新拉取**，前后均 4 行、该行仍在（**无本地乐观删除**）。`2f`：**未出现「已删除」**。仪器 B4：`DELETE /laboratory/1` → 400 且响应体含「台设备」。静态锁三条：删除路径必须含 `await loadLaboratories()`、必须含 `showError(result)`、**不得**出现 `records.value.filter` |
+| ④ 设备状态可切、可逆 | **仪器 `4a/4b/4c` 用真实按钮走完一个来回**：设备 9「X 射线衍射仪」（实验室 1，本人）`可用 → 点「设为维护中」→ 重取后状态列「维护中」→ 点「设为可用」→ 重取后「可用」`。**DB 复核该设备最终为 `AVAILABLE`，环境已复原。** 仪器 B6 另在自建实验室里跑完 `建实验室→建设备→切状态→抓取→清理` 全链 |
+| ⑤ 越权改他室设备 → 403 + 展示文案 | **仪器 `3a/3b/3c/3d`**：他室设备（超速离心机，实验室 4）**照常出现在列表**（D-2 裁定：前端不做归属过滤）→ 点「设为维护中」→ 展示后端 **`无权管理该实验室`** → 重取后该行状态**未变**且行仍在 → **未出现「状态已更新」**。仪器 B5/B8 复现同一 403（后者为 `laboratoryId=999999` 建设备） |
+| ⑥ 前端不可能发出非法状态值 | **结构性成立，且有锁**：动作按钮由 `resolveStatus('EquipmentStatus', row.status).actions` 驱动（`AVAILABLE: [maintain,disable]`／`MAINTENANCE: [enable,disable]`／`DISABLED: [enable]`），目标是**静态映射表** `EQUIPMENT_STATUS_ACTION_TARGETS` 的查表结果。仪器 `5a`：表格里出现过的动作文案 `["设为维护中","停用","设为可用"]` **全部在固定集合内**；`5b`：设备表单状态是**受控下拉**（与实验室、分类合计 3 个 select），非自由输入。**注意这条本来是"看起来锁住了"**——见下方 M8 |
+
+#### 仪器自身的坑（第 7、8 个）
+
+1. **第 7 个 · 用组件目录名当路由路径，让仪器错误伪装成应用缺陷。** 仪器初版把实验室页写成 `/admin/laboratory`（组件目录名），而路由 `path` 是 **`laboratories`（复数）**。该 URL 命中 404 页，而 404 页**既不报控制台错误、`.el-table` 也只是数量为 0**，于是产出两条看起来完全像应用缺陷的 FAIL（`1b 表格就绪=false`、`2a 行数=0`）。**实际应用从头到尾是对的**——`/admin/laboratories` 实测 4 行、列正确、编辑/删除按钮齐全。已修：改正 URL，并在 `navigate()` 里加 **404 断言**（body 含「页面不存在」即立刻抛"仪器错误"，不再让拼错 URL 静默降级为一条 FAIL）。
+2. **第 8 个 · 仪器崩溃会连带丢掉它之后跑出的全部证据。** 上面那次失败后脚本在取"首行操作按钮"时因 `document.querySelector(...)` 返回 `null` 而抛 `TypeError`，**直接终止进程**——段 3–6 的 12 条断言**一条都没跑**（不是"失败"，是"没跑"，两者在报告里长得一样）。已修两处：无行时返回空数组让断言自己失败；并给六个段各套一层 `guard()`，**段内异常只让该段变红，不再吞掉下游证据**。
+
+#### 证伪实验（9 个变异，复原后逐字节一致）
+
+**打在生产文件上**（`AdminLaboratoryListView.vue` / `AdminEquipmentListView.vue` / `api/equipment.js` / `routes.js`），复原用 `cp` 快照 + `sha256` 校验（**不用 `git checkout`**——F7 改动全部未暂存，从索引恢复会整段抹掉）。
+
+| 变异 | 改坏什么 | 期望 | 实际 | 变红断言 |
+|---|---|---|---|---|
+| M1 | 映射表目标改成枚举外的 `BOGUS` | FAIL | **CAUGHT** | 判据⑥ `equipment actions map only to valid enum targets` |
+| M2 | 状态切换后**不重取**（乐观更新） | FAIL | **CAUGHT** | `equipment status changes always refetch` |
+| M3 | 页面里写 `role` 字面量判等 | FAIL | **CAUGHT** | 判据① `admin views never consult the role directly` |
+| M4 | `status` 走 `data` 不走 `params` | FAIL | **CAUGHT** | `equipment status API uses a query parameter` |
+| M5 | 删除后本地 `filter` 不重取 | FAIL | **CAUGHT** | 重取锁（反向） |
+| M6 | 摘掉 `/admin` 的 `meta.roles` | FAIL | **CAUGHT** | 判据① + `verify-batch` |
+| M7 | 新增 `views/admin/batch/` 文件（模拟 F8 越界） | FAIL | **CAUGHT** | F8 边界锁 + `verify-batch` |
+| M8 | 绕过映射表、把目标**写死**成 `'MAINTENANCE'` | FAIL | ~~SURVIVED~~ → **CAUGHT** | 首轮**全绿通过**，返工后新增加锁（见 R2） |
+| M9 | 摘掉 D-13 的"当前行实验室并入下拉"兜底 | PASS | **SURVIVED** | **无断言——记录在案的已知缺口**，不上锁 |
+
+**M3 首轮是"我的变体写错了"，不是锁失效。** 我注入的是 `route_placeholder === 'LAB_ADMIN'`，左边名字**不含 `role`**，所以 A7 的正则 `/role\s*(?:===|!==)/` 合法地没匹配。若就此收手会**误判 A7 失效**。改用三种真实形态（`userStore.profile?.role === 'LAB_ADMIN'`、`roles.includes('LAB_ADMIN')`、`row.role !== 'LAB_ADMIN'`）重测，**全部 CAUGHT**。
+
+**M8 是这轮最有价值的一条**：它证明判据⑥ **并非结构性成立**——把查表结果换成字面量，原本所有断言全绿。"动作集合受控"在**按钮文案**层确实受控，但**发给后端的值**可以绕过映射表。这正是"写在注释里的口号"与"真被断言锁住"的差别。
+
+#### Review 发现的问题（3 项，已一次性批量返工）
+
+1. **R1 · 判据②当时零真机覆盖，且在真实库里留了脏数据。** B1 断言"新建返回 16–18 位字符串 id"——**这个前提是我在 Packet 里给错的**：`Laboratory.id`/`Equipment.id` 都是 `@TableId(type = IdType.AUTO)` **MySQL 自增**（实测返回 `9348`、`9355`、`9356`），**不走 `RedisIdWorker`**，我把预约 id 的 18 位前提误套到了实验室/设备上。后果有三：B1 FAIL；B2/B3 被连带 SKIP（**判据②当时零真机覆盖**）；断言在 `createdLaboratoryId` 赋值**之前**抛出 → 清理没跑 → **在真实库留下一个孤儿实验室**。已修：id 紧跟成功之后赋值、接受 number 或纯数字字符串的正整数、B1–B3 整体套 `try/finally` + `cleanupCreatedLaboratoryFixture`。我另手工删除了残留的 `9348` 并核验 DB 回到 4 实验室 / 0 残留。
+2. **R2 · M8 暴露的锁缺口**（见上）：新增断言强制 `handleStatusChange` 体内**必须含 `EQUIPMENT_STATUS_ACTION_TARGETS[action]`** 且**不得含** `AVAILABLE`/`MAINTENANCE`/`DISABLED` 三个字面量。返工后重跑变异，**M8 已 CAUGHT**。
+3. **R3 · 列表加载失败文案展示两遍**（toast + 内联 `EmptyState`），与学生端 `EquipmentListView.vue` 的"只内联"不一致。已改：**加载路径去掉 toast、写路径保留**；并加**双向静态锁**（加载路径不得含 `showError(`、`handleSave`/`handleDelete`/`handleStatusChange` 必须含）防回退。
+
+**Codex 本轮未出现"改测试迁就实现"**——恰恰相反，`verify-admin.mjs` 的白名单断言比首版**更严**，还新增了 `meta.roles` 断言。
+
+#### 边界改法：F7 **合法击穿** F5 立下的一条越界防护，收紧而非删除
+
+`verify-batch.mjs` 原有一条断言 **`admin routes and views remain outside this phase`**（"admin 目录不许有改动"）。F7 的整个交付面就是 admin 目录，这条被**合法击穿**。处理方式是 **F5 R5 / F6 教训的直接复用——收紧而不是删除**：
+
+1. 原断言的**意图**是"后续 Phase 的管理端域尚未进入"，不是"admin 目录永远不许动"。故从"目录不许有改动"收紧为 **"目录里不许出现后续 Phase 的域"**：`assert.doesNotMatch(file, /batch|reservation|dlq/i)`。
+2. 子路由改为**精确集合并列相等**（`[['','admin-home'],['equipment','admin-equipment-list'],['laboratories','admin-laboratory-list']]`），**没有退化成"非空即可"**——否则 F8 加批次管理、F9 加预约记录时不会被发现。**F8/F9/F10 加路由时必须显式更新这里。**
+3. **A 组条数维持 13**：一条换一条，无净丢失（M6/M7 证明收紧后仍有实效）。
+
+#### 迄今仍未覆盖
+
+- **判据②只有间接证据**：`LaboratoryVO` 不含 `adminUserId`（**D-2**），前端**原理上无法**判断归属。直接证据在 DB 侧（`admin_user_id=1016`），已如实登记为"前端验不了、我在 DB 侧验了"。**这是覆盖边界，不是已通过。**
+- **M9 已知缺口**：D-13 兜底（编辑设备时把当前行的实验室并入下拉）**无任何断言**，摘掉它仪器全绿。不上锁的理由是它属"体验兜底而非正确性"，但**这是记录在案的缺口**。
+- **D-13 仍在**：`/laboratory/list` 被后端钳每页 5 条，实验室超过 5 个时建设备的下拉会**静默少列**。F7 的"∪ 当前行"只兜住了**编辑**路径，**新建**路径仍受限。
+- **仪器 `4c` 的提示采集为空**（`提示=""`）：ElMessage 去重窗口把上一条「状态已更新」也滤掉了。**该条断言的是状态列而非提示**，故不影响结论；但提示采集在"连续两次同类操作"下不可靠，是仪器的已知弱点。
+- **浏览器仪器与判别脚本仍是 `/tmp` 下的临时件、不入库**（同 F2–F6 惯例）：`/tmp/f7-cdp-verify.mjs`（19 断言，零依赖 CDP）+ `/tmp/f7-mutation-check.py`（9 变异）。
+- **观感判断只能人眼确认**（同 F3–F6）；**D-2**（已裁定 F7 不动后端、按判据⑤走）、**D-5**（管理员看单个预约详情，F9 建议行内抽屉）、**D-13**（见上）继续挂账。
 
 ---
 

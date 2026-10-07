@@ -87,6 +87,18 @@ export const routes = [
           menu: { title: '管理首页', icon: 'Odometer', order: 1 },
         },
       },
+      {
+        path: 'laboratories',
+        name: 'admin-laboratory-list',
+        component: () => import('../views/admin/laboratory/AdminLaboratoryListView.vue'),
+        meta: { title: '我的实验室', menu: { title: '我的实验室', icon: 'School', order: 2 } },
+      },
+      {
+        path: 'equipment',
+        name: 'admin-equipment-list',
+        component: () => import('../views/admin/equipment/AdminEquipmentListView.vue'),
+        meta: { title: '我的设备', menu: { title: '我的设备', icon: 'Cpu', order: 3 } },
+      },
     ],
   },
   {
