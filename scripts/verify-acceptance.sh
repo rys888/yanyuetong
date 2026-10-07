@@ -9,8 +9,9 @@
 #     PHASE_BASE=<某个 commit> bash scripts/verify-acceptance.sh             # 额外的"禁改清单"检查
 #
 # ── 三条硬性约定（都是踩过的坑，不是风格偏好）─────────────────────────────
-# 1. 文件清单用 `find` 生成，禁用 `git ls-files`。本仓库有 3 个非 ASCII 文件名，
-#    在默认 `core.quotepath=true` 下它们会被输出成八进制转义（如 "\347\247\222..."），
+# 1. 文件清单可用 `find` 或 `git -c core.quotepath=false ls-files` 生成；用于凭据扫描时，
+#    清单语义必须是“已入库”，且路径必须是真实 UTF-8。本仓库有 3 个非 ASCII 文件名；
+#    裸 `git ls-files` 在默认 `core.quotepath=true` 下会把它们输出成八进制转义（如 "\347\247\222..."），
 #    交给 grep 会打不开文件而被**静默跳过** —— 实测恰好漏掉过含真口令的那份交付报告。
 # 2. 不写 `2>/dev/null`。探测器的报错必须浮出来，否则"0 命中"与"根本没读到"分不清。
 # 3. 每个探测器先自证（在一个已知存在的串上命中），自证不过就 FAIL，不采信它随后的 0。
@@ -20,6 +21,9 @@
 # 但按它写的范围（`find src pom.xml`）在当前树上实测并非 0：SQL 的 `LIKE` 语法 1 处、
 # DROP 脚本里 9 处中文表名注释。这两处在记录基线时**就已经存在**，所以那句"全部 0 命中"
 # 是范围没写清造成的假结论。本脚本把白名单连同**期望条数**一起钉住 —— 期望条数一旦变化就会红。
+# 上述是 §3.13 第 3 条的两处关键词白名单；D 段另有凭据白名单：出厂默认 guest 2 行，
+# 以及大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）1 行，不要混读。G 段范围是
+# `git -c core.quotepath=false ls-files --others --exclude-standard` 列出的“未跟踪且未被忽略”文件。
 
 set -u
 
@@ -137,18 +141,37 @@ fi
 # ── D. 凭据 ─────────────────────────────────────────────────────────────
 hdr 'D 凭据（结构性探测器 + 可选的字面量探测器）'
 PLACEHOLDER='change_me|your_password_here|\$\{|PLACEHOLDER|placeholder'
+CRED_PATTERN='(pass(word|wd)?|pwd)[[:space:]]*[:=][[:space:]]*[^[:space:]]+'
 # 探测器自证：范围里必须能找到"口令"这个词本身，否则 0 命中说明不了任何事
 if [ "$(printf '%s\n' "$CRED_FILES" | tr '\n' '\0' | xargs -0 grep -l -i 'password' | count)" -ge 1 ]; then
   ok "自证 D：范围内确实存在 password 字样（探测器不是恒假）"
 else
   bad "自证 D：范围里连一处 password 都没有，说明清单退化，0 命中不予采信"
 fi
-D2=$(printf '%s\n' "$CRED_FILES" | tr '\n' '\0' | xargs -0 grep -nEi '(pass(word|wd)?|pwd)[[:space:]]*[:=][[:space:]]*[^[:space:]]+' | grep -viE "$PLACEHOLDER")
-D2_NONWHITE=$(printf '%s' "$D2" | grep -v 'guest')
-if [ -z "$D2_NONWHITE" ]; then
-  ok "结构性探测器：非白名单命中 0（白名单 = RabbitMQ 出厂默认 guest，$(vlines "$D2") 行；见 PHASE10-DESIGN §2.2 订正二）"
+D2=$(printf '%s\n' "$CRED_FILES" | tr '\n' '\0' | xargs -0 grep -nEi "$CRED_PATTERN" | grep -viE "$PLACEHOLDER")
+D2_GUEST=$(printf '%s\n' "$D2" | grep 'guest')
+D2_LOG=$(printf '%s\n' "$D2" | grep -E '(PASS|FAIL|SKIP|OK):')
+N_D2_GUEST=$(vlines "$D2_GUEST")
+N_D2_LOG=$(vlines "$D2_LOG")
+echo "  白名单位置（仅文件:行号）："
+if [ -n "$D2_GUEST" ]; then
+  printf '%s\n' "$D2_GUEST" | sed -nE 's/^([^:]+:[0-9]+):.*/        guest  \1/p'
+fi
+if [ -n "$D2_LOG" ]; then
+  printf '%s\n' "$D2_LOG" | sed -nE 's/^([^:]+:[0-9]+):.*/        日志词 \1/p'
+fi
+if [ "$N_D2_GUEST" = "2" ] && [ "$N_D2_LOG" = "1" ]; then
+  ok "结构性探测器白名单条数：RabbitMQ 出厂默认 guest 2 行；大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）1 行"
 else
-  bad "结构性探测器发现非白名单命中："; printf '%s\n' "$D2_NONWHITE" | sed 's/^/        /'
+  bad "白名单条数变化：RabbitMQ 出厂默认 guest ${N_D2_GUEST} 行（期望 2）；大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）${N_D2_LOG} 行（期望 1）"
+fi
+D2_NONWHITE=$(printf '%s\n' "$D2" | grep -v 'guest' | grep -vE '(PASS|FAIL|SKIP|OK):')
+if [ -z "$D2_NONWHITE" ]; then
+  ok "结构性探测器：非白名单命中 0（白名单 = RabbitMQ 出厂默认 guest + 大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）；见 PHASE10-DESIGN §2.2 订正二）"
+else
+  bad "结构性探测器发现非白名单命中："
+  # 凭据风险只报位置与计数；命中行含真实值，回显会把值放大进日志。
+  printf '%s\n' "$D2_NONWHITE" | sed -nE 's/^([^:]+:[0-9]+):.*/        \1/p'
 fi
 if [ -n "${SCAN_SECRETS:-}" ]; then
   MISS=0; N_SEC=0
@@ -200,6 +223,49 @@ if [ -n "${PHASE_BASE:-}" ]; then
   [ "$CHANGED" = "0" ] && ok "9 个禁改文件相对 $PHASE_BASE 均未改动（active_flag DDL 见 SQL 脚本人工核对）"
 else
   info "未提供 PHASE_BASE，跳过。用法：PHASE_BASE=<commit> bash scripts/verify-acceptance.sh"
+fi
+
+# ── G. 未跟踪且未被忽略的文件 ─────────────────────────────────────────
+hdr 'G 未跟踪且未被忽略的文件'
+UNTRACKED=$(git -c core.quotepath=false ls-files --others --exclude-standard)
+N_UNTRACKED=$(vlines "$UNTRACKED")
+echo "  扫描范围 ${N_UNTRACKED} 个文件"
+if [ "$N_UNTRACKED" -gt 0 ]; then
+  printf '%s\n' "$UNTRACKED" | sed 's/^/        /'
+fi
+
+# 正向前置每次都在仓库外实际执行；否则未跟踪范围变空后，本段会退化成恒绿摆设。
+G_VALID=0
+if G_PROBE=$(mktemp /tmp/verify-acceptance.XXXXXX); then
+  trap 'rm -f "$G_PROBE"' EXIT HUP INT TERM
+  printf '%s%s %s\n' 'pass' 'word:' 'hunter2' > "$G_PROBE"
+  G_SELF=$(grep -nE "$CRED_PATTERN" "$G_PROBE" | grep -viE "$PLACEHOLDER")
+  rm -f "$G_PROBE"
+  trap - EXIT HUP INT TERM
+  if [ "$(vlines "$G_SELF")" -ge 1 ]; then
+    ok "正向前置：/tmp 探针被结构性正则命中"
+    G_VALID=1
+  else
+    bad "正向前置 INVALID：/tmp 探针未被结构性正则命中，范围的 0 命中不予采信"
+  fi
+else
+  bad "正向前置 INVALID：无法在 /tmp 创建探针，范围的 0 命中不予采信"
+fi
+
+if [ "$N_UNTRACKED" -gt 0 ]; then
+  G_HITS=$(printf '%s\n' "$UNTRACKED" | tr '\n' '\0' | xargs -0 grep -nEi "$CRED_PATTERN" | grep -viE "$PLACEHOLDER")
+else
+  G_HITS=''
+fi
+N_G_HITS=$(vlines "$G_HITS")
+if [ "$G_VALID" = "1" ] && [ "$N_G_HITS" = "0" ]; then
+  ok "结构性探测器：未跟踪且未被忽略的范围命中 0"
+elif [ "$N_G_HITS" != "0" ]; then
+  bad "结构性探测器发现 ${N_G_HITS} 处命中："
+  # 凭据风险只报位置与计数；命中行含真实值，回显会把值放大进日志。
+  printf '%s\n' "$G_HITS" | sed -nE 's/^([^:]+:[0-9]+):.*/        \1/p'
+else
+  bad "结构性探测器范围命中 0，但正向前置 INVALID，结果不予采信"
 fi
 
 # ── 汇总 ────────────────────────────────────────────────────────────────

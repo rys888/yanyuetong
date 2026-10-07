@@ -279,14 +279,31 @@ mysql -h127.0.0.1 -uroot -p hmdp < src/main/resources/db/phase10_drop_legacy_tab
 
 ### 11.4 授予管理员
 
-系统不提供「注册管理员」的接口，管理员由 SQL 直接指定（与角色拦截器 `@RequireRole(LAB_ADMIN)` 配套）：
+系统不提供「注册管理员」的接口，管理员由 SQL 直接指定（与角色拦截器 `@RequireRole(LAB_ADMIN)` 配套）。
+
+**迁移链已经建好两个种子管理员**，并把实验室挂到了各自名下（`phase3_user_role.sql:9`、`phase5_lab_ownership.sql:9,13,17`）：
+
+| 手机号 | 昵称 | 负责的实验室 |
+|---|---|---|
+| `13900000001` | 实验室管理员 | 实验室 `1`、`2` |
+| `13900000002` | 实验室管理员B | 实验室 `3`、`4` |
+
+**用它们登录就已经是管理员了，不需要额外执行任何 SQL。** 只有要让**别的**手机号成为管理员时才按下面的写法改——注意 `phone` 必须**已经在 `tb_user` 里有一行**（例如先用它登录一次）：
 
 ```sql
-UPDATE tb_user SET role = 'LAB_ADMIN' WHERE phone = '13800000000';
--- 实验室负责人：把实验室挂到该管理员名下
-UPDATE tb_laboratory SET admin_user_id = (SELECT id FROM tb_user WHERE phone='13800000000')
-WHERE id = 1;
+-- 前提：该手机号已存在于 tb_user；否则这句影响 0 行，不报错，什么也没做
+UPDATE tb_user SET role = 'LAB_ADMIN' WHERE phone = '13900000001';
+-- 认领实验室：子查询必须查得到人，否则 admin_user_id 会被写成 NULL，实验室变成无主
+UPDATE tb_laboratory
+   SET admin_user_id = (SELECT id FROM tb_user WHERE phone = '13900000001')
+ WHERE id = 1;
+
+-- 自查：两行都应返回非空
+SELECT phone, role FROM tb_user WHERE phone = '13900000001';
+SELECT id, admin_user_id FROM tb_laboratory WHERE id = 1;
 ```
+
+> **两个静默失败**（都实测过）：`phone` 不存在时 `UPDATE tb_user` 影响 **0 行**且不报错；紧接着的子查询返回 `NULL`，于是 `UPDATE tb_laboratory` 把 `admin_user_id` **写成 NULL**，该实验室的管理端随即变成空白——现象像"权限没生效"，实际是归属被清掉了。所以每条 UPDATE 之后都要按上面的自查 SQL 看一眼。
 
 ### 11.5 启动
 
@@ -299,11 +316,54 @@ mvn spring-boot:run
 
 ### 11.6 跑测试
 
+**后端**
+
 ```bash
 mvn test
+# 仓库级终验闸门（旧命名零残留 / 语义关键词 / 凭据 / 仓库形态 / 未跟踪面），见第 14 节第 6 条
+bash scripts/verify-acceptance.sh
 ```
 
 > 测试会**真实连接**本机 MySQL / Redis / RabbitMQ（不是内存替身），因此前置服务必须可用。测试用的手机号夹具在 `@AfterEach` 中自行清理。
+
+**前端**（先 `cd frontend`）
+
+| 命令 | 需要什么 |
+|---|---|
+| `npm run check:ui` | **完全离线**——纯静态断言，不连任何服务 |
+| `npm run check:request` · `check:batch` | 后端在跑（默认 `http://127.0.0.1:18081`，可用 `VERIFY_BACKEND` 覆盖）；`check:request` 还需 `VERIFY_TOKEN` |
+| `npm run check:browse` | `VERIFY_BACKEND` + `VERIFY_TOKEN` |
+| `npm run check:session` | `VERIFY_BACKEND` + `VERIFY_CODE`（验证码由人从后端日志里搬一次，见 §11.7） |
+| `npm run check:admin` · `check:reservation` | `VERIFY_BACKEND` + token；部分组还需 `VERIFY_*` 指定的库里真实 id |
+| `npm run check:dlq` | `VERIFY_BACKEND` + `VERIFY_ADMIN_TOKEN` + `VERIFY_DLQ_*` 指定的真实死信 id |
+
+**没有环境变量也能跑**：需要真数据的组会打印 `SKIP: … is not set`，而不是假装通过。部分套件另带空转护栏（例如 `check:ui` 断言"确实枚举到 15 个状态加载器"，数量对不上就红），所以"全绿"里不会混进"根本没查到"。
+
+### 11.7 启动前端（Vite 开发服务器）
+
+前端是**独立的 Vue 3 项目**，位于 `frontend/`，需要 **Node ≥ 20.19**（`vite@8.3.3` 的要求；本机实测 v22.23.1）。后端要同时起着（§11.5）。
+
+```bash
+cd frontend
+npm install
+npm run dev            # → http://localhost:5173
+```
+
+开发服务器把 `/api` 前缀的请求代理到后端，**并会剥掉 `/api` 前缀**——后端自身的路径没有 `/api`（`frontend/vite.config.js:9-13`）：
+
+| 变量 | 默认 | 用途 |
+|---|---|---|
+| `VITE_API_PROXY_TARGET` | `http://127.0.0.1:8081` | 代理目标。**后端不在 8081 时必须覆盖**，例如 8081 已被本机别的项目占用：`VITE_API_PROXY_TARGET=http://127.0.0.1:18081 npm run dev` |
+
+**登录时的验证码**：后端**不把验证码放进响应体**（只写 Redis 与 debug 日志），所以要么看后端控制台那行「发送短信验证码成功，验证码：……」再手输，要么直接从 Redis 取：
+
+```bash
+redis-cli -a '<Redis 口令>' GET login:code:13800000000
+```
+
+> 这是**有意为之**，不是没做完：曾考虑加一个"回传验证码"的开关，但那等于在配置层面开一个认证旁路，一旦误开在任何非本机 profile 就是真漏洞。本机单人演示下，"看一眼控制台"的成本更低。
+
+生产构建：`npm run build`（产物 `frontend/dist/`）。
 
 ---
 
@@ -314,6 +374,7 @@ mvn test
 | MySQL | `127.0.0.1:3306/hmdp` | `application-local.yaml` | JDBC 需 `allowPublicKeyRetrieval=true`（`caching_sha2_password`） |
 | Redis | `127.0.0.1:6379` | `application-local.yaml` | 默认 **db0** |
 | RabbitMQ | `localhost:5672`，vhost `/` | `application-local.yaml` | 管理台 `http://localhost:15672` |
+| Node.js | **≥ 20.19**（本机 v22.23.1 实测） | `frontend/`（`vite@8.3.3` 的要求） | 仅前端需要；`frontend/package.json` 未声明 `engines` |
 
 应用自身的可调项（`application.yaml`）：
 
@@ -427,7 +488,7 @@ curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $
 3. **消息可靠性是被实测过的，不是抄配置**：手动 ack 下默认 recoverer 不真正 nack 这个坑，是通过反编译 Spring AMQP 字节码核对后确定，并据此改为显式 `basicNack` + 容器级 `ConditionalRejectingErrorHandler`。
 4. **每个修复都有"改坏后测试变红"的证据**：关键行为（依赖检查、字段不外泄、异常状态码、对账退避）都用**变体实验**验证过判别力——把修复改回坏状态，确认对应用例确实变红，而不是只看"测试全绿"。
 5. **诚实的测试观**：对**没有判别力证据**的改动（纯常量、纯文案、无法确定性构造的竞态分支）明确登记为"无判别力证据"，不冒充已验证。
-6. **验收清单是可复跑的脚本，不是散落的命令**：`bash scripts/verify-acceptance.sh` 把「旧命名零残留 / 黑马语义关键词 / 凭据 / 仓库形态 / 禁改清单」编码进去，自带三项自证——探测范围里先找到一个已知存在的串，才允许采信它的 0 命中。可选 `SCAN_SECRETS='...'` 写字面量口令（脚本本身入库，所以不内嵌任何口令），`PHASE_BASE=<commit>` 查禁改文件是否被动过。
+6. **验收清单是可复跑的脚本，不是散落的命令**：`bash scripts/verify-acceptance.sh` 把「旧命名零残留 / 黑马语义关键词 / 凭据 / 仓库形态 / **未跟踪面** / 禁改清单」编码进去，自带三项自证——探测范围里先找到一个已知存在的串，才允许采信它的 0 命中；**未跟踪面那一段另有一次外置的正向前置**（在 `/tmp` 造探针），免得该范围变空后退化成恒绿摆设。**凭据探测器的失败输出只给 `文件:行号`，不回显匹配内容**——报凭据风险只报位置与计数。可选 `SCAN_SECRETS='...'` 写字面量口令（脚本本身入库，所以不内嵌任何口令），`PHASE_BASE=<commit>` 查禁改文件是否被动过。
 
 ---
 
@@ -453,6 +514,12 @@ curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $
 - **`phase10_drop_legacy_tables.sql` 是一次性脚本**：仅从课程项目升级的旧库需要执行，且**不可逆**（会删除 `tb_shop` 14 行 / `tb_blog` 4 行 / `tb_voucher` 1 行等课程演示数据）。新装库不需要它。它同时也是全仓库唯一集中写出课程表名的地方，保留它是为了让旧库仍可清理。
 - **Redis 里的键族全部是在用键**（2026-10-07 实测，课程时代残留已清理干净）：`icr:reservation:<年>:<月>:<日>` 按日自增、`reservation:batch:quota:*` 批次剩余名额、`reservation:batch:users:*` 批次去重集合、`lab:equipment:<id>` 设备详情缓存、`login:token:*` 会话。**`icr:order:*` 实测 0 个**（早期 README 提到的 3 个残留计数键已删除）；`icr:reservation:*` 是在用键，不要误删。
 - **RabbitMQ 上只有本项目自己的队列**（2026-10-07 实测）：`reservation.create.queue` 与 `reservation.create.dlq`（各 0 条，durable、非 auto-delete），交换机 `reservation.exchange` / `reservation.dlx`。早期 README 提到的课程死队列 `hello,queue1` / `hello,queue2` **实测不存在**（已清理）。
+- **管理端预约列表是"真实数据规模"下的样子**：压测夹具留在库里，`tb_reservation` 全表 **301350 行**；管理端 `/reservation/manage/page` 按 `l.admin_user_id` **归属过滤**，`13900000001`（名下实验室 1、2）看到 **301344 行**、另一位管理员（实验室 3、4）看到 6 行，每页固定 5 条即约 **60269 页**（后端所有分页端点固定 5 条/页、Query DTO 只有 `current` 没有 `pageSize`，故前端的分页控件不提供"每页条数"选择器——取舍见 `docs/frontend/FRONTEND-DESIGN.md` §11 的 D-6）。这**不是缺陷**：同页内与跨页的 18 位 id 均无重复，排序与分页经 bigint 安全解析复核过（早先"同一行重复 5 次"的现象是原生 `JSON.parse` 精度塌缩造成的假象）。
+- **两条演示链路的边界**（2026-10-07 实测，详见 `docs/frontend/FRONTEND-DESIGN.md` §10 的 F12 记录）：
+  - **死信治理 / 重放无活数据**：`tb_reservation_dlq` 为 **0 行**，F10 的夹具已消耗，该链路只能靠 F10 的实测记录佐证。
+  - **核验的成功路径当天演不出来**，这是设计使然而非缺陷：publish 强制 `booking_end_time ≤ start_time`、booking 要求 `now < booking_end_time`，故新预约必然 `start_time > now`；而核验闸门要求 `now >= batch.start_time`。演示时展示的是**闸门本身**（管理员 `400 预约尚未开始，无法核验` / 学生 `403` 空体 / 无 token `401` 空体）。若确实要演成功路径，需把某批次的时段手工改到过去——`scripts/demo-readiness.sh` 的头部注释给了这条 SQL 与其逆操作，**本仓库不会自动执行**它。
+- **560px 以下的适配未实测**：响应式手机档定在 560px（`docs/frontend/FRONTEND-DESIGN.md` §8），而真机扫描的下限是 600px（20 条路由 × 5 档宽度，100 段全绿）。
+- **`scripts/demo-readiness.sh` 是「基线态」检查，不是「健康」检查**：它把当前环境与**已记录的基线**逐项比对（`tb_reservation` 301350、`tb_reservation_batch` 23 等），因此**任何改数据的操作都会让它报 `[FAIL]`——包括演示本身**（下一次预约、发布一个批次、取消、核验）。正确用法是**先跑体检、后演示**；演示之后那几项 `[FAIL]` 的含义是"环境已偏离基线"，**不是环境损坏**（完整说明见脚本头部的「适用范围」段）。
 
 **安全**
 

@@ -44,3 +44,9 @@ dist/
 # 整目录忽略：13 个文件里 password 命中 4、authorization 命中 5，
 # 一次 `git add -A` 就会把真实口令写进不可撤销的历史。需要入库请用 `git add -f`。
 benchmark/
+### Codex interrupted-work artifacts ###
+# Codex 被中断时可能留在工作区的规划草稿/日志名；git status 默认折叠目录名，需用 -uall 才能看见。
+findings.md
+progress.md
+task_plan.md
+jmeter.log
