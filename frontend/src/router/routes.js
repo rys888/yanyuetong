@@ -105,6 +105,12 @@ export const routes = [
         component: () => import('../views/admin/batch/AdminBatchListView.vue'),
         meta: { title: '我的批次', menu: { title: '我的批次', icon: 'Calendar', order: 4 } },
       },
+      {
+        path: 'reservations',
+        name: 'admin-reservation-list',
+        component: () => import('../views/admin/reservation/AdminReservationListView.vue'),
+        meta: { title: '预约记录', menu: { title: '预约记录', icon: 'Tickets', order: 5 } },
+      },
     ],
   },
   {

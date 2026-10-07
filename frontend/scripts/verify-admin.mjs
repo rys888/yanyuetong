@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url'
 
 import * as ElementPlusIcons from '@element-plus/icons-vue'
 
+import { parseBigintJson } from '../src/api/bigintJson.js'
 import { ENUM_VALUES } from '../src/constants/enums.js'
-import { statusMap } from '../src/constants/statusMap.js'
+import { resolveStatus, statusMap } from '../src/constants/statusMap.js'
 import { routes } from '../src/router/routes.js'
 
 process.env.NO_PROXY = '*'
@@ -15,8 +16,8 @@ process.env.no_proxy = '*'
 const FRONTEND_ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SRC_ROOT = path.join(FRONTEND_ROOT, 'src')
 const groups = {
-  A: { expected: 20, pass: 0, fail: 0, skip: 0 },
-  B: { expected: 24, pass: 0, fail: 0, skip: 0 },
+  A: { expected: 30, pass: 0, fail: 0, skip: 0 },
+  B: { expected: 32, pass: 0, fail: 0, skip: 0 },
 }
 
 let createdLaboratoryId = null
@@ -72,6 +73,10 @@ function exportedFunctions(source) {
   return [...source.matchAll(/export\s+function\s+(\w+)\s*\(/g)].map((match) => match[1])
 }
 
+function exportedNames(source) {
+  return [...source.matchAll(/export\s+(?:const|function)\s+(\w+)\b/g)].map((match) => match[1])
+}
+
 function extractFunctionBody(source, functionName) {
   const start = source.search(new RegExp(`async\\s+function\\s+${functionName}\\s*\\(`))
   assert.notEqual(start, -1, `missing ${functionName}`)
@@ -88,7 +93,7 @@ function extractFunctionBody(source, functionName) {
 async function verifyGroupA() {
   console.log('\nA group — admin routes, API, and source contract')
 
-  await check('A', 'admin route registers the four ordered menu entries with real icons', () => {
+  await check('A', 'admin route registers the five ordered menu entries with real icons', () => {
     const adminRoute = routes.find((route) => route.path === '/admin')
     assert.deepEqual(
       adminRoute?.children?.map((route) => [route.path, route.name]),
@@ -97,9 +102,10 @@ async function verifyGroupA() {
         ['laboratories', 'admin-laboratory-list'],
         ['equipment', 'admin-equipment-list'],
         ['batches', 'admin-batch-list'],
+        ['reservations', 'admin-reservation-list'],
       ],
     )
-    assert.deepEqual(adminRoute.children.map((route) => route.meta.menu.order), [1, 2, 3, 4])
+    assert.deepEqual(adminRoute.children.map((route) => route.meta.menu.order), [1, 2, 3, 4, 5])
     for (const route of adminRoute.children) {
       assert.equal(typeof ElementPlusIcons[route.meta.menu.icon], 'object')
     }
@@ -238,6 +244,7 @@ async function verifyGroupA() {
     readSource('src/views/admin/laboratory/AdminLaboratoryListView.vue'),
     readSource('src/views/admin/equipment/AdminEquipmentListView.vue'),
     readSource('src/views/admin/batch/AdminBatchListView.vue'),
+    readSource('src/views/admin/reservation/AdminReservationListView.vue'),
   ])
 
   await check('A', 'batch actions come only from status metadata and have an exact handler map', async () => {
@@ -260,6 +267,158 @@ async function verifyGroupA() {
       /const\s+params\s*=\s*computed\s*\(\s*\(\)\s*=>\s*buildManageBatchQuery\s*\(\s*route\.query\s*\)\s*\)/,
     )
     assert.doesNotMatch(source, /\bbuildBatchQuery\b/)
+  })
+
+  await check('A', 'reservation API exposes the exact F9 surface and transport contract', async () => {
+    const source = await readSource('src/api/reservation.js')
+    assert.deepEqual(exportedNames(source).sort(), [
+      'PENDING_503_MESSAGE',
+      'RETRYABLE_503_MESSAGE',
+      'cancelReservation',
+      'classifySubmitFailure',
+      'fetchManageReservationPage',
+      'fetchReservationById',
+      'fetchReservationPage',
+      'shouldContinuePolling',
+      'submitReservation',
+      'verifyReservation',
+    ].sort())
+    assert.equal((source.match(/method\s*:\s*['"]get['"]/g) ?? []).length, 3)
+    assert.equal((source.match(/method\s*:\s*['"]post['"]/g) ?? []).length, 3)
+    assert.equal((source.match(/method\s*:\s*['"]put['"]/g) ?? []).length, 0)
+    assert.equal((source.match(/url\s*:\s*['"]\/reservation['"]/g) ?? []).length, 1)
+    assert.equal((source.match(/url\s*:\s*['"]\/reservation\/page['"]/g) ?? []).length, 1)
+    assert.equal((source.match(/url\s*:\s*['"]\/reservation\/manage\/page['"]/g) ?? []).length, 1)
+    assert.equal((source.match(/url\s*:\s*`\/reservation\/\$\{id\}`/g) ?? []).length, 1)
+    assert.equal((source.match(/url\s*:\s*`\/reservation\/\$\{id\}\/cancel`/g) ?? []).length, 1)
+    assert.equal((source.match(/url\s*:\s*`\/reservation\/\$\{id\}\/verify`/g) ?? []).length, 1)
+    const verifyStart = source.indexOf('export function verifyReservation')
+    assert.notEqual(verifyStart, -1)
+    const verifyBody = source.slice(verifyStart, source.indexOf('\n}', verifyStart) + 2)
+    assert.doesNotMatch(verifyBody, /\bdata\s*:/)
+  })
+
+  await check('A', 'manage reservation query accepts numeric batch ids and all reservation statuses only', async () => {
+    const query = await import('../src/utils/query.js')
+    assert.equal(query.RESERVATION_STATUSES, ENUM_VALUES.ReservationStatus)
+    for (const status of ENUM_VALUES.ReservationStatus) {
+      assert.deepEqual(query.buildManageReservationQuery({ current: '2', batchId: '123', status }), {
+        current: 2,
+        batchId: '123',
+        status,
+      })
+    }
+    assert.deepEqual(query.buildManageReservationQuery({
+      current: '0',
+      batchId: '1234567890123456789',
+      status: 'VERIFIED',
+      userId: '1',
+      pageSize: 100,
+      sort: 'id',
+    }), { current: 1 })
+  })
+
+  await check('A', 'manage reservation active-filter predicate recognizes only batch and status', async () => {
+    const { hasActiveManageReservationFilter } = await import('../src/utils/query.js')
+    assert.equal(hasActiveManageReservationFilter({ current: 2, userId: '1', name: 'x' }), false)
+    assert.equal(hasActiveManageReservationFilter({ batchId: '1' }), true)
+    assert.equal(hasActiveManageReservationFilter({ status: 'RESERVED' }), true)
+    for (const emptyValue of ['', undefined, null]) {
+      assert.equal(hasActiveManageReservationFilter({ batchId: emptyValue, status: emptyValue }), false)
+    }
+  })
+
+  await check('A', 'reservation actions come only from manage metadata and have an exact handler map', async () => {
+    const source = await readSource('src/views/admin/reservation/AdminReservationListView.vue')
+    assert.match(source, /resolveStatus\s*\(\s*['"]ReservationStatus['"]\s*,\s*row\.status\s*\)\?\.manageActions\s*\?\?\s*\[\]/)
+    const literal = source.match(/const\s+ADMIN_RESERVATION_ACTION_HANDLERS\s*=\s*\{([^}]+)\}/s)?.[1]
+    assert.ok(literal, 'missing ADMIN_RESERVATION_ACTION_HANDLERS')
+    const handlerActions = [...literal.matchAll(/\b(\w+)\s*:/g)].map((match) => match[1]).sort()
+    const manageActions = [...new Set(
+      ENUM_VALUES.ReservationStatus.flatMap((status) => statusMap.ReservationStatus[status].manageActions),
+    )].sort()
+    assert.deepEqual(handlerActions, manageActions)
+  })
+
+  await check('A', 'reservation verification reloads before success and gates the toast on a status difference', async () => {
+    const source = await readSource('src/views/admin/reservation/AdminReservationListView.vue')
+    const body = extractFunctionBody(source, 'handleVerify')
+    assert.match(body, /const\s+statusBefore\s*=\s*row\.status/)
+    assert.match(body, /await\s+verifyReservation\s*\(\s*row\.id\s*\)/)
+    assert.match(body, /await\s+loadReservations\s*\(\s*\)/)
+    assert.match(body, /if\s*\(\s*state\.value\s*!==\s*['"]ready['"]\s*\)\s*return/)
+    assert.match(body, /String\s*\(\s*item\.id\s*\)\s*===\s*String\s*\(\s*row\.id\s*\)/)
+    assert.match(body, /if\s*\(\s*statusAfter\s*!==\s*statusBefore\s*\)\s*ElMessage\.success\s*\(\s*['"]核验成功['"]\s*\)/)
+    const reloadIndex = body.indexOf('await loadReservations()')
+    const readyGateIndex = body.indexOf("state.value !== 'ready'")
+    const successIndex = body.indexOf("ElMessage.success('核验成功')")
+    assert.equal(reloadIndex < readyGateIndex && readyGateIndex < successIndex, true)
+    assert.doesNotMatch(source, /records\.value\.(?:push|splice)\s*\(/)
+    assert.doesNotMatch(source, /records\.value\s*=\s*[^\n;]*\.map\s*\(/)
+  })
+
+  await check('A', 'reservation verification stops when confirmation is rejected', async () => {
+    const source = await readSource('src/views/admin/reservation/AdminReservationListView.vue')
+    const body = extractFunctionBody(source, 'handleVerify')
+    assert.match(body, /ElMessageBox\.confirm\s*\(/)
+    assert.match(body, /catch\s*(?:\([^)]*\)\s*)?\{[^}]*\breturn\b[^}]*\}/s)
+    const confirmIndex = body.indexOf('ElMessageBox.confirm')
+    const verifyIndex = body.indexOf('verifyReservation(')
+    assert.notEqual(verifyIndex, -1)
+    assert.equal(confirmIndex < verifyIndex, true)
+    assert.match(body, /await\s+loadReservations\s*\(/)
+  })
+
+  await check('A', 'admin reservation view has no status literal branches and uses the manage query builder', async () => {
+    const source = await readSource('src/views/admin/reservation/AdminReservationListView.vue')
+    assert.doesNotMatch(source, /\bstatus\s*===\s*['"][^'"]+['"]/)
+    assert.match(
+      source,
+      /const\s+params\s*=\s*computed\s*\(\s*\(\)\s*=>\s*buildManageReservationQuery\s*\(\s*route\.query\s*\)\s*\)/,
+    )
+    assert.doesNotMatch(source, /\bbuildReservationQuery\b/)
+  })
+
+  await check('A', 'admin reservation view implements three states, filters, pagination, and URL synchronization', async () => {
+    const source = await readSource('src/views/admin/reservation/AdminReservationListView.vue')
+    assert.match(source, /PageHeader\s+title=['"]预约记录['"]/)
+    assert.match(source, /:model-value=['"]params\.batchId['"]/)
+    assert.match(source, /v-for=['"]item in statusOptions['"]/)
+    assert.match(source, /state\s*===\s*['"]error['"]/)
+    assert.match(source, /state\s*===\s*['"]ready['"]\s*&&\s*records\.length\s*===\s*0/)
+    assert.match(source, /activeFilter\s*\?\s*['"]没有符合条件的预约['"]\s*:\s*['"]暂无预约记录['"]/)
+    assert.match(source, /v-else-if=['"]state === 'ready'['"]/)
+    assert.match(source, /<el-table\b/)
+    assert.match(source, /<el-pagination\b/)
+    assert.match(source, /:page-size=['"]PAGE_SIZE['"]/)
+    const loadBody = extractFunctionBody(source, 'loadReservations')
+    assert.match(loadBody, /const\s+sequence\s*=\s*\+\+requestSequence/)
+    assert.match(loadBody, /sequence\s*!==\s*requestSequence/)
+    assert.match(loadBody, /params\.value\.current\s*>\s*lastPageOf\s*\(\s*total\.value\s*\)/)
+    assert.match(source, /watch\s*\(\s*\(\)\s*=>\s*route\.query\s*,\s*loadReservations\s*,\s*\{\s*immediate\s*:\s*true\s*\}\s*\)/)
+    assert.match(source, /router\.replace\s*\(\s*\{\s*query\s*\}/)
+  })
+
+  await check('A', 'admin reservation loading stays inline while write failures use toast', async () => {
+    const source = await readSource('src/views/admin/reservation/AdminReservationListView.vue')
+    const loadBody = extractFunctionBody(source, 'loadReservations')
+    const verifyBody = extractFunctionBody(source, 'handleVerify')
+    assert.doesNotMatch(loadBody, /showError\s*\(|ElMessage\./)
+    assert.match(verifyBody, /showError\s*\(/)
+  })
+
+  await check('A', 'reservation manage actions are orthogonal and unknown statuses fail closed', () => {
+    assert.deepEqual(statusMap.ReservationStatus.RESERVED.actions, ['cancel'])
+    for (const [enumName, values] of Object.entries(statusMap)) {
+      for (const metadata of Object.values(values)) {
+        assert.equal(Object.hasOwn(metadata, 'manageActions'), enumName === 'ReservationStatus')
+      }
+    }
+    assert.deepEqual(statusMap.ReservationStatus.RESERVED.manageActions, ['verify'])
+    for (const status of ['CANCELLED', 'COMPLETED', 'NO_SHOW']) {
+      assert.deepEqual(statusMap.ReservationStatus[status].manageActions, [])
+    }
+    assert.equal(Object.hasOwn(resolveStatus('ReservationStatus', 'FUTURE_STATE'), 'manageActions'), false)
   })
 
   await check('A', 'batch cancellation stops when confirmation is rejected', async () => {
@@ -339,9 +498,9 @@ async function verifyGroupA() {
     }
   })
 
-  await check('A', 'later admin domains after F8 do not exist yet', async () => {
+  await check('A', 'later admin domains after F9 do not exist yet', async () => {
     const files = await collectSourceFiles(path.join(SRC_ROOT, 'views', 'admin'))
-    for (const file of files) assert.doesNotMatch(path.basename(file), /reservation|dlq/i)
+    for (const file of files) assert.doesNotMatch(path.basename(file), /dlq/i)
   })
 }
 
@@ -349,14 +508,14 @@ async function rawRequest(backendURL, token, requestPath, options = {}) {
   const response = await fetch(`${backendURL}${requestPath}`, {
     ...options,
     headers: {
-      authorization: token,
+      ...(token ? { authorization: token } : {}),
       ...(options.body ? { 'content-type': 'application/json' } : {}),
       ...options.headers,
     },
     signal: AbortSignal.timeout(5000),
   })
   const text = await response.text()
-  const body = text ? JSON.parse(text) : null
+  const body = text ? parseBigintJson(text) : null
   console.log(`  measured: ${options.method ?? 'GET'} ${requestPath} -> ${response.status} ${text}`)
   return { status: response.status, body }
 }
@@ -480,6 +639,27 @@ async function cleanupCreatedBatchFixtures(backendURL, token) {
       assert.equal(cancelled.body.success, true)
     }
   }
+}
+
+async function fetchManagedReservations(backendURL, token, filters = {}) {
+  const records = []
+  let current = 1
+  let total = 0
+  do {
+    const search = new URLSearchParams({ ...filters, current: String(current) })
+    const result = await rawRequest(backendURL, token, `/reservation/manage/page?${search}`)
+    assert.equal(result.status, 200)
+    assert.equal(result.body.success, true)
+    records.push(...(Array.isArray(result.body.data) ? result.body.data : []))
+    total = Number(result.body.total) || 0
+    current += 1
+  } while ((current - 1) * 5 < total)
+  return { records, total }
+}
+
+async function fetchManagedReservationById(backendURL, token, id) {
+  const { records } = await fetchManagedReservations(backendURL, token)
+  return records.find((row) => String(row.id) === String(id))
 }
 
 async function verifyGroupB() {
@@ -635,6 +815,126 @@ async function verifyGroupB() {
     })
     assert.equal(result.status, 403)
     assert.equal(result.body.errorMsg, '无权管理该实验室')
+  })
+
+  await check('B', 'managed reservation page includes own ids and excludes foreign ids and batches', async () => {
+    const ownId = process.env.VERIFY_RESERVATION_NOT_STARTED_ID || process.env.VERIFY_RESERVATION_STARTED_ID
+    const foreignId = process.env.VERIFY_RESERVATION_FOREIGN_ID
+    const foreignBatchId = process.env.VERIFY_MANAGE_FOREIGN_BATCH_ID
+    const missing = [
+      !ownId ? 'VERIFY_RESERVATION_NOT_STARTED_ID/VERIFY_RESERVATION_STARTED_ID' : null,
+      !foreignId ? 'VERIFY_RESERVATION_FOREIGN_ID' : null,
+      !foreignBatchId ? 'VERIFY_MANAGE_FOREIGN_BATCH_ID' : null,
+    ].filter(Boolean)
+    if (missing.length) return skip(`${missing.join('、')} 未提供`)
+    const managed = await fetchManagedReservations(backendURL, token)
+    assert.equal(managed.records.some((row) => String(row.id) === String(ownId)), true)
+    assert.equal(managed.records.some((row) => String(row.id) === String(foreignId)), false)
+    const foreignBatchPage = await rawRequest(
+      backendURL,
+      token,
+      `/reservation/manage/page?batchId=${foreignBatchId}&current=1`,
+    )
+    assert.equal(foreignBatchPage.status, 200)
+    assert.equal(foreignBatchPage.body.success, true)
+    assert.deepEqual(foreignBatchPage.body.data, [])
+    assert.equal(Number(foreignBatchPage.body.total), 0)
+  })
+
+  await check('B', 'not-started verification returns the exact 400 message with zero side effects', async () => {
+    const id = process.env.VERIFY_RESERVATION_NOT_STARTED_ID
+    if (!id) return skip('VERIFY_RESERVATION_NOT_STARTED_ID 未提供')
+    const before = await fetchManagedReservationById(backendURL, token, id)
+    assert.ok(before, `managed reservation ${id} not found before verification`)
+    const result = await rawRequest(backendURL, token, `/reservation/${id}/verify`, { method: 'POST' })
+    assert.equal(result.status, 400)
+    assert.equal(result.body.errorMsg, '预约尚未开始，无法核验')
+    const after = await fetchManagedReservationById(backendURL, token, id)
+    assert.ok(after, `managed reservation ${id} not found after verification`)
+    assert.equal(after.status, before.status)
+    assert.equal(after.updateTime, before.updateTime)
+  })
+
+  await check('B', 'started verification completes the exact reservation id and reload observes COMPLETED', async () => {
+    const id = process.env.VERIFY_RESERVATION_STARTED_ID
+    if (!id) return skip('VERIFY_RESERVATION_STARTED_ID 未提供')
+    const before = await fetchManagedReservationById(backendURL, token, id)
+    assert.ok(before, `managed reservation ${id} not found before verification`)
+    const result = await rawRequest(backendURL, token, `/reservation/${id}/verify`, { method: 'POST' })
+    assert.equal(result.status, 200)
+    assert.equal(result.body.success, true)
+    const after = await fetchManagedReservationById(backendURL, token, id)
+    assert.ok(after, `managed reservation ${id} not found after verification`)
+    assert.equal(after.status, 'COMPLETED')
+  })
+
+  await check('B', 'repeated verification stays 200 without changing completed update time', async () => {
+    const id = process.env.VERIFY_RESERVATION_STARTED_ID
+    if (!id) return skip('VERIFY_RESERVATION_STARTED_ID 未提供')
+    const before = await fetchManagedReservationById(backendURL, token, id)
+    assert.ok(before, `managed reservation ${id} not found before repeated verification`)
+    assert.equal(before.status, 'COMPLETED')
+    const result = await rawRequest(backendURL, token, `/reservation/${id}/verify`, { method: 'POST' })
+    assert.equal(result.status, 200)
+    assert.equal(result.body.success, true)
+    const after = await fetchManagedReservationById(backendURL, token, id)
+    assert.ok(after, `managed reservation ${id} not found after repeated verification`)
+    assert.equal(after.status, 'COMPLETED')
+    assert.equal(after.updateTime, before.updateTime)
+  })
+
+  await check('B', 'foreign not-started reservation is denied before the lifecycle gate', async () => {
+    const id = process.env.VERIFY_RESERVATION_FOREIGN_ID
+    const batchId = process.env.VERIFY_MANAGE_FOREIGN_BATCH_ID
+    const missing = [
+      !id ? 'VERIFY_RESERVATION_FOREIGN_ID' : null,
+      !batchId ? 'VERIFY_MANAGE_FOREIGN_BATCH_ID' : null,
+    ].filter(Boolean)
+    if (missing.length) return skip(`${missing.join('、')} 未提供`)
+    const batch = await rawRequest(backendURL, token, `/reservation-batch/${batchId}`)
+    assert.equal(batch.status, 200)
+    assert.equal(batch.body.success, true)
+    assert.equal(new Date(batch.body.data.startTime).getTime() > Date.now(), true)
+    const result = await rawRequest(backendURL, token, `/reservation/${id}/verify`, { method: 'POST' })
+    assert.equal(result.status, 403)
+    assert.equal(result.body.errorMsg, '无权管理该实验室')
+  })
+
+  await check('B', 'missing and non-numeric reservation ids stay on the measured authorization paths', async () => {
+    const missing = await rawRequest(
+      backendURL,
+      token,
+      '/reservation/9223372036854775807/verify',
+      { method: 'POST' },
+    )
+    assert.equal(missing.status, 403)
+    assert.equal(missing.body.errorMsg, '无权核验该预约')
+    const nonNumeric = await rawRequest(backendURL, token, '/reservation/not-a-number/verify', {
+      method: 'POST',
+    })
+    // 非数字路径段走 Spring @PathVariable Long 类型转换失败 → 全局处理器兜成 500「服务器异常」，
+    // 与 scripts/verify-browse.mjs:437 记录的是同一类实测通道（后端侧如此，非 F9 引入）。
+    assert.equal(nonNumeric.status, 500)
+    assert.equal(nonNumeric.body.success, false)
+    assert.equal(nonNumeric.body.errorMsg, '服务器异常')
+  })
+
+  await check('B', 'student role cannot access reservation management or verification', async () => {
+    const studentToken = process.env.VERIFY_STUDENT_TOKEN
+    const id = process.env.VERIFY_RESERVATION_NOT_STARTED_ID || process.env.VERIFY_RESERVATION_STARTED_ID
+    const missing = [!studentToken ? 'VERIFY_STUDENT_TOKEN' : null, !id ? 'reservation fixture id' : null].filter(Boolean)
+    if (missing.length) return skip(`${missing.join('、')} 未提供`)
+    const page = await rawRequest(backendURL, studentToken, '/reservation/manage/page?current=1')
+    assert.equal(page.status, 403)
+    const verify = await rawRequest(backendURL, studentToken, `/reservation/${id}/verify`, { method: 'POST' })
+    assert.equal(verify.status, 403)
+  })
+
+  await check('B', 'reservation management and verification require authentication', async () => {
+    const page = await rawRequest(backendURL, null, '/reservation/manage/page?current=1')
+    assert.equal(page.status, 401)
+    const verify = await rawRequest(backendURL, null, '/reservation/1/verify', { method: 'POST' })
+    assert.equal(verify.status, 401)
   })
 
   let primaryBatchId = null

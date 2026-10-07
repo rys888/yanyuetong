@@ -60,3 +60,11 @@ export function classifySubmitFailure(result) {
 export function shouldContinuePolling(result) {
   return result.kind === 'denied' || result.kind === 'network'
 }
+
+export function fetchManageReservationPage(params) {
+  return request({ method: 'get', url: '/reservation/manage/page', params })
+}
+
+export function verifyReservation(id) {
+  return request({ method: 'post', url: `/reservation/${id}/verify` })
+}
