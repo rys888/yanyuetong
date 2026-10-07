@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
 import { access, readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
-import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
 import * as ElementPlusIcons from '@element-plus/icons-vue'
@@ -17,9 +15,7 @@ import { formatDateTime } from '../src/utils/datetime.js'
 process.env.NO_PROXY = '*'
 process.env.no_proxy = '*'
 
-const execFileAsync = promisify(execFile)
 const FRONTEND_ROOT = fileURLToPath(new URL('../', import.meta.url))
-const REPOSITORY_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const SRC_ROOT = path.join(FRONTEND_ROOT, 'src')
 const PUBLIC_BATCH_STATUSES = ['PUBLISHED', 'CLOSED']
 const LOCAL_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/
@@ -311,19 +307,27 @@ async function verifyGroupA() {
     ])
   })
 
-  await check('A', 'admin routes and views remain outside this phase', async () => {
+  await check('A', 'admin routes stay inside the F7 surface and later admin domains do not exist yet', async () => {
     const adminRoute = routes.find((route) => route.path === '/admin')
+    // 白名单而非"非空即可"：F8 加批次管理、F9 加预约记录、F10 加死信时必须显式更新这里。
     assert.deepEqual(
-      adminRoute?.children?.map((route) => [route.path, route.name]),
-      [['', 'admin-home']],
+      adminRoute?.children?.map((route) => [route.path, route.name]).sort(),
+      [
+        ['', 'admin-home'],
+        ['equipment', 'admin-equipment-list'],
+        ['laboratories', 'admin-laboratory-list'],
+      ].sort(),
     )
+    assert.deepEqual(adminRoute?.meta?.roles, ['LAB_ADMIN'])
 
-    const { stdout } = await execFileAsync(
-      'git',
-      ['status', '--porcelain', '--', 'frontend/src/views/admin'],
-      { cwd: REPOSITORY_ROOT },
-    )
-    assert.equal(stdout.trim(), '')
+    // 原断言的意图 = "后续 Phase 的管理端域尚未进入"。F7 之后 admin 目录归 F7 所有，
+    // 所以把它从"目录不许有改动"收紧为"目录里不许出现后续 Phase 的域"。
+    const adminViews = (await collectSourceFiles(path.join(SRC_ROOT, 'views', 'admin')))
+      .map((file) => path.relative(FRONTEND_ROOT, file))
+    assert.ok(adminViews.length > 0, 'admin 视图目录不应为空')
+    for (const file of adminViews) {
+      assert.doesNotMatch(file, /batch|reservation|dlq/i, file)
+    }
   })
 
   await check('A', 'reservationBatch API exposes only the two read-only GET functions', async () => {
