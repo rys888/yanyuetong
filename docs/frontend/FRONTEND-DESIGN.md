@@ -1337,6 +1337,67 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 
 ---
 
+### F10 验收实测记录（2026-10-07，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain` 共 **13 项**，其中 **F10 占 11 项**（`git status` 默认把新增的 `views/admin/dlq/` 目录**折叠成 1 项**，故"项数 11"与"文件数 12"并不矛盾）。按**文件**数是 **12 个 F10 文件**：**新增 6 个**（`scripts/verify-dlq.mjs`、`api/dlq.js`、`constants/messages.js`、`utils/jsonText.js`、`views/admin/dlq/{DlqListView,DlqDetailView}.vue`）、**修改 6 个**（`package.json`、`scripts/verify-{admin,batch}.mjs`、`router/routes.js`、`utils/query.js`、本文件）。非 F10 的 2 项是 `docs/study/`（未跟踪，非本 Phase 产物）与 `jmeter.log`（并发会话的产物）。
+
+**后端零接触**：`git status --porcelain` 中无任何后端路径（无 `src/main`、无 `.java`、无 `pom.xml`）。判据①–⑤ 依赖的后端能力**全部是既有实现**：`ReservationDlqController` 的三个端点、`ReservationDlqStatus` 三值、`SystemConstants.DEFAULT_PAGE_SIZE = 5`（与前端 `PAGE_SIZE` 一致）。`ReservationDlqQueryDTO` 只有 `status` + `current`，**页大小由后端决定**，前端不传。
+
+#### §10 判据 ①–⑤ 的落点
+
+| 判据 | 落点 | 证据（哪一条在哪儿被验到） |
+|---|---|---|
+| ① 列表不显示 payload，详情才显示且格式化后不溢出 | A（`DlqListView.vue` 全文无 `payload`）+ **B1**（真机列表 payload 恒为 null 或缺失）+ CDP 1b/1d/2e | **真机实测**：列表条目字段恰为 7 个，`payload` 键**不存在**（非 null）；CDP 段 1 表头 7 列无 payload、**任一单元格都不含 payload 内容**；段 2 用 6077 字节夹具，格式化后 `pre` 1072/1072、文档 1440/1440，**两级都不横向溢出** |
+| ② 成功与各拒绝原因提示正确，英文码映射为中文且**可展开看原文** | A（映射单测）+ **B3/B5/B6/B7/B8/B11**（真机拒绝原文逐字钉死）+ CDP 5c/5e + **合成响应仪器 7 条** | 5c 页面展示后端中文原文「死信记录已处理，不能重复重放」；5e 中文原因**不**渲染展开区（`code` 为 null 分支）；合成 `REPLAY_PUBLISH_UNKNOWN` ⇒ 告警标题为中文映射、展开后 `pre` 显示后端原文（见下「仍未覆盖」的限定） |
+| ③ 对 `REPLAYED`/`DISCARDED` 重放被拒 | **B5/B6** + CDP 5a/5b/5d | 确认框**明说**「该记录当前状态为「已丢弃」，后端会拒绝本次重放」；提交后恰好 1 次 `POST /replay` |
+| ④ 重放前二次确认 | **A11**（源码级：确认在请求之前、catch 体内无请求）+ CDP 4c/4e | 点「返回」后 `POST /replay` 计数 **0→0**，且对话框关闭、页面 payload 仍在 |
+| ⑤ 页面不对 payload 做"解析后重写" | A（formatter 源码无 `JSON.parse`/`stringify`）+ **B2** + CDP 3a/3b | 详情页 DOM 里 18 位 `reservationId` **逐字符保留**；**阴性对照**确认不出现被舍成 `…000` 的版本 |
+
+**成功半边（判据③）**：CDP 段 6 点「重放」→ 描述字段由「待处理」变为「**已重放**」、重放次数 0→1、**重取后 payload 仍在**、无残留失败告警。
+
+#### 各套件实测结果
+
+| 命令 | 结果 |
+|---|---|
+| `npm run check:dlq`（离线，无 `VERIFY_*`） | 退出码 0，**A 组 13 PASS / 0 FAIL / 0 SKIP**，B 组 12 SKIP |
+| `npm run check:dlq`（真机 18081 + 重建夹具） | **A 13 PASS / 0 FAIL；B 12 PASS / 0 FAIL / 0 SKIP** |
+| `npm run check:request`（真机 + 学生 token） | **26 PASS / 0 FAIL**（= F9 基线，无回归） |
+| `npm run check:batch`（离线） | A 组 13 PASS / 0 FAIL；B 6 SKIP；C 3 SKIP |
+| `npm run check:admin`（离线） | A 组 30 PASS / 0 FAIL；B 组 32 SKIP |
+| 浏览器仪器（零依赖 CDP，**30 断言**） | **30 PASS / 0 FAIL**，全程无控制台错误 |
+| 合成响应仪器（英文码展开分支，**7 断言**） | **7 PASS / 0 FAIL** |
+| `npm run build` | 退出码 0，产出 `dist/assets/dlq-*.js` 等 5 个 chunk（仅既存 chunk-size 警告） |
+
+#### 仪器自身的坑（第 13–15 个）
+
+13. **同进程 stub + `execFileSync` ⇒ 仪器自杀式伪红。** B1 空洞实验的第一版把 stub 与**被测套件放在同一个 Node 进程**里：`execFileSync` 是同步的，会**阻塞事件循环**，stub 永远没机会回包 → 套件拿到 `AbortError: timeout` → `check()` 把异常记成 FAIL。而脚本的结论行还理直气壮地打印「断言已经长牙（修复已生效）」。**红必须来自被测对象，不能来自仪器**：现在 stub 起在独立进程，且脚本显式判 `AbortError|TimeoutError`，命中就记「实验无效」（退出码 2），不当作成功。
+14. **拿 `document.body.innerText` 当"页面已更新"的等待条件。** CDP 段 6 第一版等 `body.innerText.includes('已重放')`，而成功 toast 的文案「重放已提交，状态已更新为「已重放」」**也含这三个字** ⇒ "重取失败但 toast 弹了"同样会变绿。改为只读 `el-descriptions` 的**状态字段**。
+15. **把"夹具排在第几页"当已知条件。** 段 2 原本假定超大 payload 夹具 G 一定在第 1 页；实测列表按创建时间倒序、每页 5 条，G 是首行**纯属运气**。改为「用第一行验证 列表→详情 链路，G 直接开详情页」。
+
+#### 证伪实验（1 个空洞断言实测 + 5 个 A 组变异，复原后逐字节一致）
+
+1. **B1 空洞通过 —— 实测，不是读代码推断。** B1 的断言体只到 `assert.equal(Array.isArray(data), true)` 就进了 `for (const record of data)`，而 `[]` 恰好满足数组检查 ⇒ **后端返回 0 行时循环体一次都不执行，断言照样报绿**。用独立进程 stub 令 page 恒返回 `{success:true,data:[],total:0}`：修复前输出 `PASS: [B] list payload is always null or absent`（且 `AbortError` 判据为 false，排除伪红）；返工加 `data.length > 0` 前置后，同一个实验输出 `FAIL`。**它唯一抓不到的故障恰好是它最该抓的那个（列表页返回 0 行）。**
+2. **A 组 5 个变异，5/5 CAUGHT，且每条都由我指名的断言捕获**：M1 拆掉二次确认（`ElMessageBox.confirm(` → 失效）→ `replay confirmation precedes…`；M2 让 `replayReservationDlq(` 的字面量出现在确认之前 → 同一条的顺序断言；M3 失败路径插入 `state.value = 'error'` → `replay failure uses a persistent alert…`；M4 引入 `status === 'NEW'` 硬编码 → `replay confirmation is driven by DLQ status actions…`；M5 改坏 NACK 的中文映射 → `known replay reason codes map to exact Chinese text…`。变异**打在生产文件上**（`DlqDetailView.vue` / `messages.js`），复原**不用 `git checkout`**（未跟踪文件从索引恢复不了），靠内存快照逐字节写回，事后 3 个文件 sha256 与快照一致。
+
+#### Review 发现的问题（1 项返工 + 1 项范围说明 + 1 条被撤回的误记）
+
+1. **B1 空洞通过**（同上，已批量返工修复：加一行 `assert.equal(result.body.data.length > 0, true)`，**不加** check 条数、**不降级为 SKIP**）。返工后复跑真机 B 组仍 **12/12 全绿**，确认新前置在真实数据上不误伤。
+2. **范围：第二阶段改动了 `messages.js`。** 其 mtime 与 `DlqDetailView.vue` **完全相同（18:29:28）**，而 Packet 只授权改两个文件。改动内容是把英文码识别从"整个 reason 精确等于英文码"改成"在 reason 原文中查找英文码"，使被包在长句里的 `REPLAY_PUBLISH_UNKNOWN` 仍能映射。**已复核行为正确**（三个英文码的映射、中文与未知值透传且 `code: null`、`null`/`''` 回落「重放失败」，四条都有断言钉住），**予以保留、不回滚**；Codex 亦承认这一步应先标注范围扩展再动手。
+3. **一条被我撤回的 Review 记录**：我此前记下 `verify-dlq.mjs:214` 有行尾空白，**提交前复核时该行尾空白已不存在**（`grep ' $'` 无命中），故未列进返工包。**先验证再下结论**，否则会把已消失的问题写成缺陷。
+
+#### Packet 自身的一处事实错误（在此更正）
+
+我在 F10 第二阶段的 Packet 里写了「replay 的返回值里不含 payload」。**实测相反**：`POST /reservation-dlq/{id}/replay` 成功时返回的 VO **含 payload**（夹具 A 为 67 字节）。所需的「成功后重新拉取」行为仍然正确且必要（状态与 `replayCount` 都要刷新），故**不产生返工**；但该表述本身是错的。
+
+#### 迄今仍未覆盖
+
+- **观感判断只能人眼确认**（同 F3–F9）。
+- **英文码分支的"真机"证据是合成的（如实标注）。** 真机上**无法**从 UI 触发 `REPLAY_CONFIRM_NACK`/`RETURN`/`PUBLISH_UNKNOWN`（需要有本事让 MQ publish 失败）。故页面渲染是用 CDP `Fetch.fulfillRequest` 合成 `/replay` 响应验证的：**应用代码、路由、组件、详情 GET 全为真，只有那一个响应被替换**（拦截计数实测为 1 次）。映射函数本身另由 A 组单测覆盖。
+- **失败路径不重取 ⇒ 状态可能陈旧（有意为之的取舍）。** 后端以「已处理」拒绝时，页面展示的仍是**本地**状态；若该记录是被别人抢先处理的，告警文案与描述面板会同屏矛盾。**不改**的原因是 `loadDetail()` 会把 `state` 置为 `loading`，从而**卸载承载告警的 `v-else-if="state === 'ready'"` 块** —— 即"失败后重取"会直接击穿判据② 的「告警必须持久」。两者兼得需把重取结果写进独立 ref 而不动 `state`，属超出 F10 范围的设计改动，记为已知取舍。
+- **`docs/study/` 未跟踪目录仍在工作区**（12/18 文件命中凭据模式）。故本轮提交**逐条显式列路径**，不用 `git add -A`，并在暂存后复核文件清单、对暂存区做凭据自检（只数命中条数、不回显匹配内容）。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**

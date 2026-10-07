@@ -125,3 +125,16 @@ export function hasActiveManageReservationFilter(params) {
     (key) => params?.[key] !== '' && params?.[key] !== undefined && params?.[key] !== null,
   )
 }
+
+export function buildDlqQuery(query) {
+  const status = query?.status
+
+  return stripEmpty({
+    current: normalizeCurrent(query?.current),
+    status: ENUM_VALUES.ReservationDlqStatus.includes(status) ? status : undefined,
+  })
+}
+
+export function hasActiveDlqFilter(params) {
+  return params?.status !== '' && params?.status !== undefined && params?.status !== null
+}

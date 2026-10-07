@@ -93,20 +93,22 @@ function extractFunctionBody(source, functionName) {
 async function verifyGroupA() {
   console.log('\nA group — admin routes, API, and source contract')
 
-  await check('A', 'admin route registers the five ordered menu entries with real icons', () => {
+  await check('A', 'admin route registers the six ordered menu entries with real icons', () => {
     const adminRoute = routes.find((route) => route.path === '/admin')
+    const menuRoutes = adminRoute?.children?.filter((route) => route.meta.menu)
     assert.deepEqual(
-      adminRoute?.children?.map((route) => [route.path, route.name]),
+      menuRoutes?.map((route) => [route.path, route.name]),
       [
         ['', 'admin-home'],
         ['laboratories', 'admin-laboratory-list'],
         ['equipment', 'admin-equipment-list'],
         ['batches', 'admin-batch-list'],
         ['reservations', 'admin-reservation-list'],
+        ['dlq', 'admin-dlq-list'],
       ],
     )
-    assert.deepEqual(adminRoute.children.map((route) => route.meta.menu.order), [1, 2, 3, 4, 5])
-    for (const route of adminRoute.children) {
+    assert.deepEqual(menuRoutes.map((route) => route.meta.menu.order), [1, 2, 3, 4, 5, 6])
+    for (const route of menuRoutes) {
       assert.equal(typeof ElementPlusIcons[route.meta.menu.icon], 'object')
     }
   })
@@ -498,9 +500,16 @@ async function verifyGroupA() {
     }
   })
 
-  await check('A', 'later admin domains after F9 do not exist yet', async () => {
-    const files = await collectSourceFiles(path.join(SRC_ROOT, 'views', 'admin'))
-    for (const file of files) assert.doesNotMatch(path.basename(file), /dlq/i)
+  await check('A', 'admin domains are exactly the ones through F10', async () => {
+    const entries = await readdir(path.join(SRC_ROOT, 'views', 'admin'))
+    assert.deepEqual(entries.sort(), [
+      'AdminHomeView.vue',
+      'batch',
+      'dlq',
+      'equipment',
+      'laboratory',
+      'reservation',
+    ])
   })
 }
 
