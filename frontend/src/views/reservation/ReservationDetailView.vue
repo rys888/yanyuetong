@@ -119,6 +119,8 @@ async function loadDetail() {
     return
   }
   if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
     return
   }
   if (result.kind === 'denied') {
@@ -194,7 +196,7 @@ watch(() => route.params.id, loadDetail, { immediate: true })
   margin-top: 22px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   :deep(.el-descriptions__body) {
     overflow-x: auto;
   }

@@ -140,7 +140,11 @@ async function loadReservations() {
   errorMessage.value = ''
   const result = await fetchManageReservationPage(params.value)
   if (sequence !== requestSequence) return
-  if (result.kind === 'unauthorized') return
+  if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
+    return
+  }
   if (result.kind === 'ok') {
     records.value = Array.isArray(result.data) ? result.data : []
     total.value = Number(result.total) || 0
@@ -240,7 +244,7 @@ watch(() => route.query, loadReservations, { immediate: true })
   margin-top: 20px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .filter-panel {
     grid-template-columns: 1fr;
   }

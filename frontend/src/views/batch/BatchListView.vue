@@ -159,6 +159,8 @@ async function loadBatches() {
     return
   }
   if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
     return
   }
   if (result.kind === 'ok') {
@@ -273,7 +275,7 @@ onMounted(loadFilterOptions)
   margin-top: 20px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .filter-panel {
     grid-template-columns: 1fr;
   }

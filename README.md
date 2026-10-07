@@ -349,10 +349,12 @@ curl http://localhost:8081/user/me -H "authorization: $TOKEN"
 **浏览（读路径，走缓存）**
 
 ```bash
-curl 'http://localhost:8081/laboratory/list?current=1'
-curl http://localhost:8081/equipment/1
-curl 'http://localhost:8081/equipment/page?current=1&laboratoryId=1'
-curl 'http://localhost:8081/equipment-category/list'
+# 除「登录」里的 /user/code 与 /user/login 两个端点外，其余端点一律需要登录
+curl 'http://localhost:8081/laboratory/list?current=1' -H "authorization: $TOKEN"
+curl http://localhost:8081/equipment/1 -H "authorization: $TOKEN"
+curl 'http://localhost:8081/equipment/page?current=1&laboratoryId=1' -H "authorization: $TOKEN"
+curl 'http://localhost:8081/equipment-category/list' -H "authorization: $TOKEN"
+# 不带上面这行 header 时，这四个端点实测均为 401 且响应体为空（见下方「错误语义」）
 ```
 
 **预约（写路径，Lua + MQ）**
@@ -383,15 +385,38 @@ curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $
 
 **接口总览**
 
+共 **33** 个端点，逐条与 `controller/` 源码核对。`⚙` = 除登录外还要求 `LAB_ADMIN` 角色（共 18 个）；不带 `⚙` 的只需登录，任意角色即可；仅 `/user/code` 与 `/user/login` 是公开端点。
+
 | 模块 | 端点 |
 |---|---|
-| 用户 | `POST /user/code`、`POST /user/login`、`POST /user/logout`、`GET /user/me` |
-| 实验室 | `GET /laboratory/{id}`、`GET /laboratory/list`、`POST /laboratory`、`PUT /laboratory`、`DELETE /laboratory/{id}` |
-| 设备 | `GET /equipment/{id}`、`GET /equipment/page`、`POST /equipment`、`PUT /equipment`、`PUT /equipment/{id}/status`、`DELETE /equipment/{id}` |
+| 用户 | `POST /user/code`（公开）、`POST /user/login`（公开）、`POST /user/logout`、`GET /user/me` |
+| 实验室 | `GET /laboratory/{id}`、`GET /laboratory/list`、`POST /laboratory` ⚙、`PUT /laboratory` ⚙、`DELETE /laboratory/{id}` ⚙ |
+| 设备 | `GET /equipment/{id}`、`GET /equipment/page`、`POST /equipment` ⚙、`PUT /equipment` ⚙、`PUT /equipment/{id}/status` ⚙、`DELETE /equipment/{id}` ⚙ |
 | 设备分类 | `GET /equipment-category/list` |
-| 预约批次 | `POST /reservation-batch`、`PUT /reservation-batch`、`POST /reservation-batch/{id}/publish`、`/close`、`/cancel`、`GET /reservation-batch/{id}`、`GET /reservation-batch/page`、`GET /reservation-batch/manage/page` |
-| 预约 | `POST /reservation`、`GET /reservation/page`、`GET /reservation/{id}`、`GET /reservation/manage/page`、`POST /reservation/{id}/cancel`、`POST /reservation/{id}/verify` |
-| 死信 | `GET /reservation-dlq/page`、`GET /reservation-dlq/{id}`、`POST /reservation-dlq/{id}/replay` |
+| 预约批次 | `POST /reservation-batch` ⚙、`PUT /reservation-batch` ⚙、`POST /reservation-batch/{id}/publish` ⚙、`/close` ⚙、`/cancel` ⚙、`GET /reservation-batch/{id}`、`GET /reservation-batch/page`、`GET /reservation-batch/manage/page` ⚙ |
+| 预约 | `POST /reservation`、`GET /reservation/page`、`GET /reservation/{id}`、`GET /reservation/manage/page` ⚙、`POST /reservation/{id}/cancel`、`POST /reservation/{id}/verify` ⚙ |
+| 死信 | `GET /reservation-dlq/page` ⚙、`GET /reservation-dlq/{id}` ⚙、`POST /reservation-dlq/{id}/replay` ⚙ |
+
+**错误语义**（实测；「空体」指响应体 0 字节）
+
+| 情形 | HTTP | 响应体 |
+|---|---|---|
+| 无 token / token 失效 | `401` | **空体** —— `LoginInterceptor` 只 `setStatus(401)`，不写 body |
+| 已登录但角色不符（USER 打 `⚙` 端点） | `403` | **空体** —— `RoleInterceptor` 只 `setStatus(403)`，不写 body |
+| 角色正确但**无归属权限**（操作他室设备、他人预约） | `403` | `Result.fail("<中文原因>")`，如 `无权管理该实验室`、`无权核验该预约` |
+| 业务校验失败（非草稿批次被改、时段重叠、设备状态值非法…） | `400` | `Result.fail("<中文原因>")` |
+| 路径段不是数字（如 `/laboratory/abc`） | `500` | `Result.fail("服务器异常")` |
+| 路径未映射 | `404` | Spring 默认错误体（**不是** `Result` 形状） |
+
+**「资源不存在」在详情端点上有两种形态**，前端两种都要处理（实测）：
+
+| 端点 | 资源不存在时 |
+|---|---|
+| `GET /equipment/{id}` | `Result.fail("设备不存在")` —— 业务失败形态 |
+| `GET /reservation-batch/{id}` | `Result.fail("预约批次不存在")` |
+| `GET /reservation-dlq/{id}` | `Result.fail("死信记录不存在")` |
+| `GET /laboratory/{id}` | **`200` + `{"success":true}`**，`data` 字段被省略（即 `Result.ok(null)`）—— 与上三者不同形 |
+| `GET /reservation/{id}` | `403` + `Result.fail("无权查看该预约")` —— 他人记录与不存在**同形**，不区分，避免泄露存在性 |
 
 ---
 
@@ -426,8 +451,8 @@ curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $
 
 - **`tb_user` 里有 1011 行课程时代遗留用户**（外加 2 个 `LAB_ADMIN`）。这些行不会被自动清理；新装库由迁移链建库时不会有它们。终验对用户表的判据是"行数未变"，不是"0 行"。
 - **`phase10_drop_legacy_tables.sql` 是一次性脚本**：仅从课程项目升级的旧库需要执行，且**不可逆**（会删除 `tb_shop` 14 行 / `tb_blog` 4 行 / `tb_voucher` 1 行等课程演示数据）。新装库不需要它。它同时也是全仓库唯一集中写出课程表名的地方，保留它是为了让旧库仍可清理。
-- **Redis 里可能有 `icr:order:*` 残留键**（3 个，无 TTL）。这是**已删除的秒杀/订单域**留下的历史计数键，不会再产生，可安全删除。注意 `icr:reservation:*` 是**在用的**按日自增键，不要误删。
-- **本机 RabbitMQ 上残留两个课程死队列** `hello,queue1` / `hello,queue2`（durable、非 auto-delete，各积压 1 条消息）。声明它们的课程时代监听器与测试类已在 Phase 10 删除，**仓库里已无任何引用**；属 broker 侧状态，不影响本项目运行（本项目只用 `reservation.*` 的交换机与队列）。
+- **Redis 里的键族全部是在用键**（2026-10-07 实测，课程时代残留已清理干净）：`icr:reservation:<年>:<月>:<日>` 按日自增、`reservation:batch:quota:*` 批次剩余名额、`reservation:batch:users:*` 批次去重集合、`lab:equipment:<id>` 设备详情缓存、`login:token:*` 会话。**`icr:order:*` 实测 0 个**（早期 README 提到的 3 个残留计数键已删除）；`icr:reservation:*` 是在用键，不要误删。
+- **RabbitMQ 上只有本项目自己的队列**（2026-10-07 实测）：`reservation.create.queue` 与 `reservation.create.dlq`（各 0 条，durable、非 auto-delete），交换机 `reservation.exchange` / `reservation.dlx`。早期 README 提到的课程死队列 `hello,queue1` / `hello,queue2` **实测不存在**（已清理）。
 
 **安全**
 

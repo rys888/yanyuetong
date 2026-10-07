@@ -142,6 +142,8 @@ async function loadDetail() {
     return
   }
   if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
     return
   }
   if (result.kind === 'business' || (result.kind === 'ok' && result.data === null)) {
@@ -228,7 +230,7 @@ async function pollReservation(id, sequence, startedAt) {
     return
   }
   if (result.kind === 'unauthorized') {
-    clearPollingTimers()
+    finishAsPending(sequence)
     return
   }
   if (result.kind === 'ok') {
@@ -346,7 +348,7 @@ onUnmounted(resetSubmission)
   font-size: 14px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   :deep(.el-descriptions__body) {
     overflow-x: auto;
   }

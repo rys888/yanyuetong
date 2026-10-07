@@ -268,7 +268,11 @@ async function loadBatches() {
   errorMessage.value = ''
   const result = await fetchManageBatchPage(params.value)
   if (sequence !== requestSequence) return
-  if (result.kind === 'unauthorized') return
+  if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
+    return
+  }
   if (result.kind === 'ok') {
     records.value = Array.isArray(result.data) ? result.data : []
     total.value = Number(result.total) || 0
@@ -482,7 +486,7 @@ onMounted(loadLaboratoryOptions)
   width: 100%;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .filter-panel {
     grid-template-columns: 1fr;
   }

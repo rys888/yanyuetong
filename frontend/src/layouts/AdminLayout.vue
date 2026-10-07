@@ -26,6 +26,12 @@
       <el-header class="admin-header" height="56px">
         <el-breadcrumb separator="/">
           <el-breadcrumb-item>管理后台</el-breadcrumb-item>
+          <el-breadcrumb-item
+            v-if="breadcrumbParent"
+            :to="{ name: breadcrumbParent.name }"
+          >
+            {{ breadcrumbParent.title }}
+          </el-breadcrumb-item>
           <el-breadcrumb-item>{{ breadcrumbTitle }}</el-breadcrumb-item>
         </el-breadcrumb>
 
@@ -87,6 +93,19 @@ const menuItems = computed(() =>
 const breadcrumbTitle = computed(
   () => route.meta.menu?.title || route.meta.title || '管理后台',
 )
+const breadcrumbParent = computed(() => {
+  if (!route.meta.parent) return null
+
+  const parentRoute = router
+    .getRoutes()
+    .find((record) => record.name === route.meta.parent)
+  if (!parentRoute) return null
+
+  return {
+    name: parentRoute.name,
+    title: parentRoute.meta.menu?.title || parentRoute.meta.title || String(parentRoute.name),
+  }
+})
 const avatarText = computed(() => userStore.profile?.nickName?.trim().charAt(0) || '研')
 const roleLabel = computed(
   () => resolveStatus('UserRole', userStore.profile?.role).label,
@@ -219,7 +238,7 @@ onBeforeUnmount(() => {
   padding: 24px;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 560px) {
   .admin-header {
     padding: 0 14px;
   }
