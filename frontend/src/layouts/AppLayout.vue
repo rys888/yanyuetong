@@ -217,7 +217,20 @@ async function handleCommand(command) {
   padding: 28px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 992px) {
+  .app-header {
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
+    padding: 0 14px;
+  }
+
+  .brand span,
+  .user-copy {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
   .app-header {
     grid-template-columns: auto 1fr auto;
     gap: 8px;

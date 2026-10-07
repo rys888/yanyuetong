@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 560px) {
   .login-panel {
     padding: 28px 22px 24px;
   }

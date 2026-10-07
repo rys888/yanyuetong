@@ -113,6 +113,8 @@ async function load() {
     return
   }
   if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
     return
   }
   if (result.kind === 'ok') {
@@ -194,7 +196,7 @@ watch(() => route.query, load, { immediate: true })
   margin-top: 20px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .filter-panel {
     grid-template-columns: 1fr;
   }

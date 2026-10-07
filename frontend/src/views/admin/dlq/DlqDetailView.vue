@@ -16,6 +16,14 @@
         </template>
       </EmptyState>
 
+      <EmptyState v-else-if="state === 'ready' && !detail" title="死信记录不存在">
+        <template #action>
+          <RouterLink :to="{ name: 'admin-dlq-list' }">
+            <el-button type="primary">返回死信列表</el-button>
+          </RouterLink>
+        </template>
+      </EmptyState>
+
       <template v-else-if="state === 'ready'">
         <div class="detail-actions">
           <el-button type="danger" :loading="replaying" @click="handleReplay">重放死信</el-button>
@@ -71,16 +79,16 @@ import { formatJsonText } from '../../../utils/jsonText.js'
 
 const route = useRoute()
 const state = ref('loading')
-const detail = ref({})
+const detail = ref(null)
 const errorMessage = ref('')
 const replaying = ref(false)
 const replayFailureText = ref('')
 const replayFailureCode = ref(null)
 const replayFailureOriginal = ref('')
 const expandedFailureSections = ref([])
-const formattedPayload = computed(() => formatJsonText(detail.value.payload))
-const dlqStatus = computed(() => resolveStatus('ReservationDlqStatus', detail.value.status))
-const canReplay = computed(() => dlqStatus.value.actions.includes('replay'))
+const formattedPayload = computed(() => formatJsonText(detail.value?.payload))
+const dlqStatus = computed(() => resolveStatus('ReservationDlqStatus', detail.value?.status))
+const canReplay = computed(() => dlqStatus.value?.actions?.includes('replay') ?? false)
 let requestSequence = 0
 
 async function loadDetail() {
@@ -89,9 +97,18 @@ async function loadDetail() {
   errorMessage.value = ''
   const result = await fetchReservationDlqById(route.params.id)
   if (sequence !== requestSequence) return
-  if (result.kind === 'unauthorized') return
+  if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
+    return
+  }
+  if (result.kind === 'business' || (result.kind === 'ok' && result.data === null)) {
+    detail.value = null
+    state.value = 'ready'
+    return
+  }
   if (result.kind === 'ok') {
-    detail.value = result.data ?? {}
+    detail.value = result.data
     state.value = 'ready'
     return
   }

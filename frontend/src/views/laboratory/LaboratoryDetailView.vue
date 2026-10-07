@@ -120,6 +120,8 @@ async function loadDetail() {
     return
   }
   if (laboratoryResult.kind === 'unauthorized') {
+    errorMessage.value = laboratoryResult.message
+    state.value = 'error'
     return
   }
   if (['business', 'error', 'clientError'].includes(laboratoryResult.kind)) {
@@ -151,6 +153,8 @@ async function loadDetail() {
     return
   }
   if (equipmentResult.kind === 'unauthorized') {
+    errorMessage.value = equipmentResult.message
+    state.value = 'error'
     return
   }
   if (['business', 'error', 'clientError'].includes(equipmentResult.kind)) {
@@ -238,7 +242,7 @@ watch(() => route.params.id, loadDetail, { immediate: true })
   font-size: 14px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   :deep(.el-descriptions__body) {
     overflow-x: auto;
   }

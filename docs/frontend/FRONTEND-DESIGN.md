@@ -570,7 +570,7 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 | 学生端 | 顶部导航 + 内容区；实验室/设备用**等高网格卡片**（名称 / 校区·楼·房间 / 状态标签 / 分类）；重点突出**剩余名额、开放窗口** |
 | 管理端 | 左侧固定菜单 220px + 顶部（面包屑 + 用户区）+ 内容区；表格用 EP 默认紧凑风格，**操作列固定右侧** |
 | 分页 | **固定 5 条/页**（后端 `DEFAULT_PAGE_SIZE=5` 且无法传 `pageSize`），分页控件**不提供"每页条数"选择器**（提供即为撒谎） |
-| 响应式 | PC 优先；断点 1200 / 992 / 768；**≤992 管理端侧边栏折叠为图标**；表格允许横向滚动 |
+| 响应式 | PC 优先；断点 **1200 / 992 / 768 / 560**（四档；原文只写三档，560 是 F11 由既有 4 处 `560` 归并而来的手机档，见 §10 的 F11 订正⑥）；**≤992 管理端侧边栏折叠为图标**（实测 220px → 64px）；表格允许横向滚动 |
 | 明令避免 | 电商/外卖/大众点评/黑马点评风、彩色渐变按钮、花哨数据大屏、移动 App 风、大面积卡片嵌套 |
 
 ---
@@ -646,6 +646,23 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 
 ⑦ **判据⑤ 的夹具与清理口径 —— 我的判据写错了，由 Codex 以 `DESIGN DECISION REQUIRED` 挡下。** 我在 Packet 里同时要求「夹具执行 close 并确认 `CLOSED`」和「本轮所有自建批次终态为 `CANCELLED`」，二者**互斥**：后端 `cancel` 只接受 `DRAFT`/`PUBLISHED`，`CLOSED` **原理上无法取消**，而批次又没有删除端点。Codex 没有自行拍板，而是显式标出卡点要求裁定 —— 这是 Packet 协议期望的行为。**修正后的口径**：恰好一个夹具终态为 `CLOSED`（单独断言），其余全部 `CANCELLED`，且**没有任何夹具停留在 `DRAFT`/`PUBLISHED`**；清理逻辑按「读回 status，仅 `DRAFT`/`PUBLISHED` 才调 cancel」判定跳过。那条 `CLOSED` 夹具行会永久留在库里，**由主控事后直接清库**（同 F7 手工删除孤儿实验室 9348 的先例）。
 
+#### F11 相对本表与 §6 目录设计的三处订正 + 两处范围裁定（派发前记录，非事后追认）
+
+① **判据① 的「11 个页面」是过期数字，订正为 15 个，并给出客观判定法。** 原数字既非路由数也非 view 数，无法核验。改为**由代码自身决定**：凡 `src/views/**/*.vue` 内含 `import … from '<任意层级>/api/…'` 者即为数据页，实测恰好 **15** 个 —— `admin/batch/AdminBatchListView`、`admin/dlq/DlqDetailView`、`admin/dlq/DlqListView`、`admin/equipment/AdminEquipmentListView`、`admin/laboratory/AdminLaboratoryListView`、`admin/reservation/AdminReservationListView`、`batch/BatchDetailView`、`batch/BatchListView`、`equipment/EquipmentDetailView`、`equipment/EquipmentListView`、`laboratory/LaboratoryDetailView`、`laboratory/LaboratoryListView`、`login/LoginView`、`reservation/ReservationDetailView`、`reservation/ReservationListView`。其中 **`LoginView` 是有意例外**：它没有 `state` 三态，而用 `sendingCode`/`submitting`/`countdown` + `ElMessage.error`（登录页的"空态"语义不成立）。**断言必须显式写出这个例外**，不得为凑数在登录页硬造一个 `state`。
+
+② **判据④ 的「不一致用词」口径澄清 —— 原表述可被读成两种相反做法，必须钉死一种。** 字面直读（"统一成同一句话"）会与一条**已锁定的设计相冲突**：`verify-admin.mjs` 把预约记录页的**两分支空态**当契约锁住了 —— `activeFilter ? '没有符合条件的预约' : '暂无预约记录'`。若把全站文案抹平成一句通用文案，会同时打掉"有筛选 vs 无数据"的区分与各实体名词（"实验室/设备/批次/预约"），属于**把信息量改掉而不是打磨**。故 F11 采纳的口径是：**④ 的可执行内核是"结构与前缀统一"，不是"用词归一"** —— (a) 所有空态/错误态一律经 `EmptyState`（loading 经 `LoadingBlock` 或 `v-loading`），不再有手写的 `<p class="…msg">`；(b) 错误文案前缀统一为 `…加载失败：<后端/请求层 message>`（如 `加载失败：`、`批次加载失败：`），不再有裸 `errorMessage` 直出；(c) **保留按实体区分的名词**，并保留"筛选无结果 / 真的没有数据"两种分支；学生侧 `你还没有预约记录` 是**有意变体**（第二人称比"暂无预约记录"更贴合学生视角），不视为不一致。
+
+③ **§6 目录设计声明的 6 项里只实施 1 项，另 4 项登记为「已评估、不实施」（经用户确认，2026-10-07）。** 先量后改的结果，不是漏做：
+- **实施 `components/LoadingBlock.vue`（新增）**：替换 `EquipmentDetailView.vue` 批次子区原先的 `<div class="batch-loading">` 与两段专用 CSS（`.batch-loading{min-height:130px}`、`.batch-message{margin:0;padding:34px 12px;text-align:center}`），使该子区与全站同构。**它只有一个真实调用点，旧 CSS 已随之删除**，不是为将来预留的抽象。
+- **不实施 `views/profile/` 与 §5 的 `{ path: 'profile' }` 路由**：后端**没有任何**可改资料端点（`/user/me` 只读；4 个 User 端点里没有更新资料/改密码）。做一个只能看不能改的"个人中心"是凭空造页；为它有东西可改而去加后端接口，直接违反「以后端为唯一事实来源」。账户信息在 Layout 顶栏（昵称 + 角色 + 退出登录）已可见。
+- **不实施 `stores/dict.js`**：枚举渲染全站一律走 `resolveStatus(枚举名, 值)` 这个**同步纯函数**，无异步加载、无跨页共享缓存、无失效时机；§7.2 本身也写了「明确不放进 Pinia」清单。为同步常量包一层 Pinia 是纯中转站，且 F1 已把 25 个取值全覆盖的责任交给 `constants/statusMap.js`。
+- **不实施 `components/ConfirmButton.vue`**：三处二次确认（F6 取消 / F9 核验 / F10 重放）的确认文案、按钮文案与**后置行为各不相同**（取消要重取并区分 `TRANSITIONED`/`ALREADY_CANCELLED`；重放要区分拒绝原因码；核验要区分幂等）。抽出来要传 4–5 个 props + 事件回传，调用点比直接用 `ElMessageBox.confirm` 更长；共性只有"弹一次"一个词。
+- **不实施 `utils/format.js`**：格式化逻辑已各自落在最小使用域（`formatJsonText` 在 F10 建的 `utils/jsonText.js`，有专属断言），新建 `utils/format.js` 只是搬家，**搬完还要改所有 import**，零收益。
+
+④ **判据⑥ 的断言范围从 `views/` 扩到全站。** 原判据只查 `views/`，而 `layouts/`、`components/` 同样属于"渲染层"，且原判据无法证明"`api/` 是唯一入口"（`views/` 干净不代表别处不绕）。F11 收紧为两条合取：渲染层三目录零 `axios`，**且** 全 `src/` 中 import `axios` 的文件集合**恰好等于** `{api/createRequest.js}`。**这是 F5 R5 → F6 → F7 → F8 的第五次同类复用：只能收紧，不能靠删断言通过。**
+
+⑤ **两处范围裁定（实测无缺陷，故不实施）。** (a) **`/403` 与 404 页不动**：CDP 实测两页在 1440/1200/992/768 四档下 `overflow` 均为 0、无控制台错误，且 `返回首页` 已按角色取 `defaultRouteFor(role)`。(b) **不改任何 `el-descriptions` 的 `:column`**：实测 768 宽度下 `laboratory/LaboratoryDetailView` 的 `:column="3"` 表**没有**出现在横向溢出元素名单里（溢出的元凶是 Layout 而非表格），加响应式列数属于无证据的过度设计。
+
 ---
 
 ## 10. 每个 Phase 的验收标准与人工测试流程
@@ -665,7 +682,7 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 | **F8** | ① 新建批次后为 `DRAFT`；② **草稿可编辑，非草稿编辑被拒**（400 "仅草稿批次可修改"）；③ 发布成功后状态变 `PUBLISHED` 且剩余名额=总名额；④ 发布校验逐条可触发并展示对应中文（时段重叠 / 预约截止晚于使用开始 / 设备不可预约 / 总名额<1）；⑤ 关闭后批次不可再被预约；⑥ **表单提交的日期字符串带 `T`**（把空格格式发出去会得到"请求体格式错误"） | 建一个时段与既有批次重叠的批次并发布（应报"同一设备的使用时段不能重叠"）；再建一个正常批次发布成功，回学生端确认可预约 |
 | **F9** | ① 管理端列表只显示**自己实验室**的预约（`l.admin_user_id` 过滤）；② 未到 `startTime` 核验 → 400 "预约尚未开始，无法核验"；③ 核验成功后**重新拉取**显示"已核验"；④ 再次核验返回 200 但页面**不得**提示"核验成功"（后端幂等无提示）；⑤ 对自己无权实验室的预约核验 → 403 | 造一个 `startTime` 在未来的批次预约，尝试核验（应报未开始）；对已到时间的预约核验两次，观察第二次的提示是否诚实 |
 | **F10** | ① 列表不显示 payload（后端列表恒 null），详情才显示且**格式化后不溢出**；② `replay` 成功与各拒绝原因分别有正确提示（含 `REPLAY_CONFIRM_NACK` 等英文代码被映射为中文，同时可展开看原文）；③ 对 `REPLAYED`/`DISCARDED` 记录重放被拒；④ 重放前二次确认；⑤ 页面不对 `payload` 做任何"解析后重写" | 制造一条死信（可停掉消费者后用 `basicNack` 或直接改库造一条 `NEW` 死信）→ 详情查看 payload → 重放 → 观察状态变 `REPLAYED`；再点一次验证被拒文案 |
-| **F11** | ① 11 个页面都有 loading / 空态 / 错误态三种表现；② 无任何页面出现空白屏或未捕获异常；③ 窗口宽度 1440/1200/992/768 下布局不破（管理端侧栏在 ≤992 折叠）；④ 全站文案无"暂无数据"以外的不一致用词；⑤ **跑通两条完整演示链路**（学生全链路、管理员全链路）；⑥ 前端源码中无 `axios` 出现在 `views/` 目录（API 层隔离的可核验判据） | 按 §3/§4 的两条演示链路各走一遍；用 DevTools 设备模拟切换宽度；`grep -rn "axios" frontend/src/views` 应为空 |
+| **F11** | ① **15 个数据页**（客观判定：文件内有 `import …/api/`；清单与原文「11 个页面」的订正见下方偏差①）都有 loading / 空态 / 错误态三种表现；② 无任何页面出现空白屏或未捕获异常；③ 窗口宽度 **1440/1200/992/768** 下布局不破（可核验判据 = `documentElement.scrollWidth - clientWidth ≤ 1`；管理端侧栏在 ≤992 折叠为 64px）；④ 全站空态/错误态的**结构与错误前缀统一**（一律走 `EmptyState`/`LoadingBlock`，错误文案前缀 `…加载失败：`；**口径见偏差②** —— 要的是结构统一，不是把各实体名词抹平成一句通用文案）；⑤ **跑通两条完整演示链路**（学生全链路、管理员全链路）；⑥ 前端源码中 `axios` **零出现**于 `views/`、`layouts/`、`components/`，且整个 `src/` 里 import `axios` 的文件**恰为** `api/createRequest.js` 一个（API 层隔离的可核验判据；范围订正见偏差④） | 按 §3/§4 的两条演示链路各走一遍；用 DevTools 设备模拟切换宽度；`grep -rn "axios" frontend/src/views frontend/src/layouts frontend/src/components` 应为空；`npm run check:ui` 退出码 0 |
 
 ---
 
@@ -1398,6 +1415,85 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 
 ---
 
+### F11 验收实测记录（2026-10-07，Claude 独立实测）
+
+**边界证明**：`git diff --stat` 共 **21 个已跟踪文件**（190 插入 / 72 删除）+ **2 个新增未跟踪文件**（`frontend/scripts/verify-ui.mjs`、`frontend/src/components/LoadingBlock.vue`）。其中**改动落在 `views/` 的 14 个文件**（F11 第一阶段，17 处 unauthorized 闭包 + 死信不存在空态 + 批次子区同构化）、**3 个布局/路由文件**（`AppLayout.vue`、`AdminLayout.vue`、`router/routes.js`，第二阶段）、**1 个 `package.json`**（新增 `check:ui`）、**2 个文档**（本文件、`README.md`）。
+
+**后端零接触**：`git status --porcelain` 中无任何 `src/main`、`.java`、`pom.xml` 路径。判据①–⑥ 依赖的后端能力全部是既有实现；F11 未新增任何 API（§9 的 F11 行本就写「无新增」）。
+
+#### 一、17 处 unauthorized 闭包的逐点核对（我数的，不采信自述）
+
+按「枚举每一个 `kind === 'unauthorized'` 分支」核，共 **17 处** = **13 处字面 `result.message` + 2 处具名变量**（`LaboratoryDetailView.vue` 的 `laboratoryResult.message` / `equipmentResult.message`）+ **1 处 `batchErrorMessage`**（`EquipmentDetailView.vue:210`）+ **1 处 `finishAsPending(sequence)`**（`BatchDetailView.vue:233`）。**我起初的 grep 只匹配字面形态，数出 14，是我漏算**；逐点枚举后与 Codex 的 17 完全一致，无遗漏。另有 3 个文件含**非 state 的** unauthorized 分支（`AdminBatchListView` 7 处、`AdminEquipmentListView` 4 处、`BatchDetailView` 3 处）——它们是**动作处理器**（发布/关闭/取消/删除/核验），不改 `state` 而弹 `ElMessage`，属正确设计，不计入 17。
+
+#### 二、§10 判据 ①–⑥ 的落点
+
+| 判据 | 落点 | 证据 |
+|---|---|---|
+| ① 15 个数据页三态齐备 | 静态断言 `check:ui` A/D 组 | `[A] 15 state loaders…`（`branchCount === 15` 空转护栏）+ `[D] …exactly 15 API-backed data pages`（`dataPages.length === 15`）+ `[D] all 14 non-login…`（14 页逐一含 `v-loading`/`error`/空态/`ready`）+ `[D] LoginView keeps its sending/submitting…`（例外显式写出） |
+| ② 无空白屏 / 无未捕获异常 | **CDP 真机扫描 100 段** | 每段均判「文档横向溢出 ≤1px ∧ 锚文案出现 ∧ `innerText` 长度 >20 ∧ 控制台错误 0」的**合取**；阴性判据（空白屏）配锚文案正向前提，防坏页空转 |
+| ③ 四档宽度布局不破 | **CDP 真机扫描** | **100 PASS / 0 FAIL**；侧栏矩阵：1440/1200 → **220px**，992/768/**600** → **64px**（`≤992` 折叠成立） |
+| ④ 结构与错误前缀统一 | 静态断言 + 源码复核 | 一律 `EmptyState` / `LoadingBlock`；错误前缀 `…加载失败：`；**保留**按实体名词与「筛选无结果 / 真无数据」两分支（口径见偏差②） |
+| ⑤ 两条演示链路 | **真机 API 实测**（见下节，含一处如实登记的缺口） | 学生链路的 6 条预约、4 实验室、12 设备、批次均在库；管理端链路的核验**闸门**已实测（400/403/401 三态） |
+| ⑥ API 层隔离 | 静态断言 `check:ui` B 组 | `[B] views/layouts/components 零 axios`（`/axios/i` 全查）+ `[B] createRequest.js 是 src 中唯一 import axios 的文件`（集合精确相等 `['src/api/createRequest.js']`） |
+
+#### 三、各套件实测结果（全部由我独立跑）
+
+| 命令 | 结果 |
+|---|---|
+| `node scripts/verify-ui.mjs`（新增，离线） | 退出码 **0**，**12 PASS / 0 FAIL**（A 3 / B 2 / C 3 / D 4） |
+| 6 套离线件（session/browse/admin/batch/reservation/dlq） | **131 PASS / 0 FAIL**（24 / 19 / 30 / 13 / 32 / 13；未设 `VERIFY_*` 的 B/C 组共 53 条 SKIP） |
+| `verify-request-layer.mjs`（真机 18081） | **26 PASS / 0 FAIL**（= F9/F10 基线，无回归） |
+| `npm run build` | 退出码 **0**（仅既存的 chunk-size 警告） |
+| CDP 真机扫描（20 路由 × 5 宽度） | **100 PASS / 0 FAIL** |
+| 变异实验（3 个，打在生产文件上） | **3/3 按预期变红**，复原后 SHA-256 逐字节一致 |
+
+#### 四、证伪实验（变异，**不是**读代码推断）
+
+三个变异各自打在**生产文件**上，每个自带**变异前字节快照 + SHA-256**，跑完从自己的快照写回并校验哈希（**不用 `git checkout`**——未跟踪/未暂存的修复从索引恢复不了）：
+
+| 变异 | 打坏什么 | 结果 |
+|---|---|---|
+| **M1** | 删掉 `LaboratoryListView.vue` unauthorized 分支里的 `state.value = 'error'` | **A 组指定断言变红**：`…expected all 15 state-loader unauthorized branches` → 退出码 1；复原后 SHA-256 `728bfae9…` 一致 |
+| **M2** | 把 `AppLayout.vue` 的 `992px` 改成白名单外的 `975px` | **C 组两条同时变红**（白名单 + 「定义了 992」）→ 退出码 1；复原后 SHA-256 `461800f6…` 一致 |
+| **M3** | 删掉 `routes.js` 里 DLQ 详情的 `parent: 'admin-dlq-list'` | **D 组面包屑断言变红** → 退出码 1；复原后 SHA-256 `9ea09397…` 一致 |
+
+**关键一步**：M1 的变异点**恰好是 Codex 在自验时改坏过的那一处**。Codex 在跑完整验证序列前撞上额度上限被切断（其自述末尾为 `You've hit your usage limit`、`Process exited with code 1`，且 23 条 `Commands Executed` **全部为 `Command: unknown`** ⇒ **它的"验证全绿"没有任何可用证据**）。按「被打断的变体会留在工作区」的教训，我**先查残留再看别的**：`LaboratoryListView.vue:85` 的 `state.value = 'error'` **在**，其余 16 处逐点亦在 ⇒ 残留不存在。
+
+#### 五、两条演示链路与一处如实登记的缺口
+
+- **学生链路（可演）**：登录 → 实验室(4) → 设备(12) → 批次 → 预约 → 我的预约。学生 `GET /reservation/page` 实测 **total=6**，含 2 条 `RESERVED` + 4 条 `CANCELLED`，够走完筛选与详情。CDP 扫描覆盖 `/laboratories`、`/equipment`、`/batches`、`/reservations` 及其详情页共 12 条路由 × 5 宽度，全绿。
+- **管理链路 — 核验（闸门可演，成功路径今天演不出）**：全部 **301344** 条预约夹具的 `batch.startTime` 都在**未来**（采样首/中/末页分别为 2026-10-21 / 10-16 / 10-14），故「成功核验」无数据可演。实测**闸门本身**（非破坏性，抛错发生在 `UPDATE` 之前）：管理员 `POST /reservation/{id}/verify` → **400 `预约尚未开始，无法核验`**（与 `ReservationLifecycleServiceImpl:95` 逐字一致）；学生 token → **403 空体**；无 token → **401 空体**；事后以 bigint 安全解析复核该记录**仍为 `RESERVED`**，证明未发生写入。**这是设计使然而非缺陷**：publish 要求 `bookingEndTime ≤ startTime`，booking 要求 `now < bookingEndTime` ⇒ 新预约必然 `startTime > now`，核验按设计只能发生在时段开始之后。
+- **管理链路 — 死信治理/重放（无活数据）**：`GET /reservation-dlq/page` 实测 **total=0**。F10 的夹具已被消耗，故判据⑤ 的这条支路**只能靠 F10 的实测记录与合成响应仪器佐证，无法从空表重新演示**。**我没有为演示而手工改库造死信/回填批次**（F11 范围是打磨，无表外改库先例）。
+
+#### 六、订正 ⑥：断点集实为**四档**，560 是由既有值归并而来（**事后发现并实测后接受，非派发前授权**）
+
+Codex 把 8 个散落取值归并为 **{1200, 992, 768, 560}**：`760→768`（11 处）、`600→560`（3 处）、`640→560`（1 处）、`480→560`（1 处）、`1080→1200`（1 处），既有 `560`（4 处）不动。**§8 原文写的是三档（1200/992/768），560 不在其中** —— 这一步是 Codex 在实现内自定的，**未按 `DESIGN DECISION REQUIRED` 标注**，我是在 Review 时才发现的。**接受的理由**（先量后判，非迁就）：(a) `560` 在 F11 之前**已是事实档位**（`HomeView`/`PageHeader`/`SubmitResult`/`AdminHomeView` 共 4 处），归并到它属于「复用既有值」而非新造；(b) 备选（把 600/640 并到 768）会让窄屏规则在平板宽度生效，反而更差；(c) 两处**收窄**（600→560、640→560）使 561–640 一带有失去适配的风险，而**原有扫描宽度集打不到该带** —— 我为此**专门补了 600px 靶点**，20 路由 × 5 宽度共 100 段**全绿**，其中唯一有实质影响的是 `AdminLayout` 的 `.user-copy{display:none}` 与内边距（实测 600 下无溢出）。**§8 的响应式行已同步订正为四档**，避免文档与代码相左。
+
+#### 七、仪器自身的坑（第 16–20 个，全部是我这一轮踩的）
+
+16. **`/login` 的锚文案"缺失"是仪器造成的假红 —— 而且它复发了一次。** 扫描在循环前预种了学生 token，路由守卫遂把 `/login` 重定向到 `/home`，锚文案自然不在页上，5 个宽度**成片假红**。同一坑我在 header 探针里已修过，却**没有同步到主扫描器**。教训：修好一个仪器后要回头统一所有同类仪器，否则同类假红会在别处重现。
+17. **把脚本名写错，把"文件不存在"当成套件失败。** 我按 `for s in request …` 调 `verify-$s.mjs`，而真名是 `verify-request-layer.mjs`，于是 `check:request` 打印 `MODULE_NOT_FOUND` 退出 1。**这是调用错误，不是回归** —— 差点被记成"F11 引入请求层回归"。
+18. **空转的否定断言（第二次踩同族坑）。** 我要验证 dev server 提供的是修复版 CSS，抓 style 模块 URL 的正则没命中 ⇒ `curl` 拿到 **index.html 回退页（426 字节）** ⇒ 「不含变异值 975」**在非 CSS 上通过**。加**正向前提**（必须含 `.app-header` 规则）后才暴露：正确的 URL 带 `?t=<时间戳>&vue&type=style…`，3087 字节，断点实为 768/992、**确无 975**。
+19. **在复核里用了原生 `JSON.parse` —— 又一次 18 位 id 精度塌缩。** 核验后复核记录状态时，我用 `JSON.parse` 解析，id 被舍成 `…803800` 从而匹配不到目标，输出"未找到"。改用项目自带的 `parseBigintJson` 后即找到且状态为 `RESERVED`。**同一个坑在同一轮内第二次踩**，说明"这个项目里永远不要用原生 `JSON.parse`"必须当成硬规矩。
+20. **`import { parse }` —— 导出名记错了。** 本项目 bigint 模块的导出是 `parseBigintJson`（另有 default），我写成 `parse`，得到 `TypeError: parse is not a function`，使上一轮的 bigint 复测一直悬空。查明后重测，**结论翻转**：`/reservation/manage/page` 连续 3 页、每页 5 条、**15 个 18 位 id 页内与跨页均无重复** ⇒ 此前"同一行重复 5 次 / 跨页 id 重复"**确系原生 `JSON.parse` 精度塌缩造成的假象**，后端分页与排序无缺陷。
+
+#### 八、Review 发现的问题
+
+1. **断点集从三档变四档且未标 DESIGN DECISION（已接受，见订正⑥）。** 不返工；`§8` 已订正、`check:ui` C 组白名单与之对齐。**注意 C 组的白名单是这次改动自己写的，因此它对"是否符合 §8"是循环论证，只对"是否回归"有效** —— 这一点必须写清，免得后人把它当成规格一致性证据。
+2. **`AppLayout.vue` 的 768 块重复声明了 992 块已有的两条规则**（`.app-header` 栅格与 `.brand span,.user-copy{display:none}`）。幂等、无害，属可维护性小瑕疵；**不值得再消耗一次 Codex 调用**，登记备查。
+3. **Codex 在工作区根建了一份 `CLAUDE.md`（19:26，702 字节）。** 它在被切断前**自行清理**了（19:29 已不存在，`git status` 不再列出）。**同时 `findings.md`/`progress.md`/`task_plan.md` 是它的 planning 草稿**（本就在未跟踪清单中）——**三者一律不提交**。识别方法：`git status --porcelain -uall` 会列出，而 `git status` 默认可能折叠目录名，**必须用 `-uall`**。
+4. **Codex 自述的验证结论全部不可采信。** 其 Call 2 自述称 `check:ui` 12 PASS/exit 0 并已做变异实验——**我独立复跑，结论相同**（这只能说明这次它没撒谎，不能说明它的自述可采信）。但它**未执行**真机响应式复测（Packet 本就要求"由控制面跑，你不需要装浏览器依赖"），且完整验证序列被额度上限打断，23 条命令全为 `unknown`。
+
+#### 九、迄今仍未覆盖
+
+- **观感判断只能人眼确认**（同 F3–F10）。
+- **死信治理/重放无活数据**（DLQ `total=0`），演示链路缺席，只能引用 F10 记录。
+- **核验的成功路径今天演不出**（全部夹具 `startTime` 在未来）；已演示闸门三态替代。
+- **`/reservation/manage/page` 共 301344 行 ⇒ 每页 5 条时是 60269 页**，管理端预约记录页在真实数据量下演示体验差（属 F9 遗留的数据规模问题，非 F11 范围）。
+- **560px 档以下的适配未实测**（扫描下限为 600）。
+
+---
+
 ## 11. FRONTEND_BACKEND_GAP
 
 > 均**不擅自修改后端**，等批准。**A 类 = 影响能否演示；B 类 = 影响体验但可绕过；C 类 = 仅登记，不建议改。**
@@ -1470,11 +1566,11 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 
 ### D 类（文档缺口，由我修订，不涉及后端代码）
 
-**D-10 · README 与实测不符两处**
-1. **§13 的浏览类 curl 示例不带 `authorization`**（`curl 'http://localhost:8081/laboratory/list?current=1'`、`curl http://localhost:8081/equipment/1`）—— 实测全部 401 且空体。应补上 header 并说明"所有接口（除登录相关两个）都需要登录"。
-2. **§15 两条已过时**：`icr:order:*` 残留键与 `hello,queue1/2` 课程死队列**已于 2026-10-06 清理完毕**（台账已记，README 未同步）。
+**D-10 · README 与实测不符两处** —— **✅ 已于 F11（2026-10-07）修订**
+1. **§13 的浏览类 curl 示例不带 `authorization`**（`curl 'http://localhost:8081/laboratory/list?current=1'`、`curl http://localhost:8081/equipment/1`）—— 实测全部 401 且空体。**已补**：四个 curl 各加 `-H "authorization: $TOKEN"`，并在代码块首行注明"除 `/user/code` 与 `/user/login` 外一律需要登录"。
+2. **§15 两条已过时**：`icr:order:*` 残留键与 `hello,queue1/2` 课程死队列**已于 2026-10-06 清理完毕**（台账已记，README 未同步）。**已改**：F11 重新实测 —— Redis 命中候选口令后 `KEYS '*'` **零个 `icr:order:*`**（实际存在的键族为 `icr:reservation:2026:10:{04,05,06,07}`、`reservation:batch:quota:*`、`reservation:batch:users:*`、`lab:equipment:*`、`login:token:*`）；`rabbitmqctl list_queues` **只有** `reservation.create.queue`（0）与 `reservation.create.dlq`（0），交换机 `reservation.exchange`/`reservation.dlx`，**无 `hello,queue1/2`**。两条 bullet 均已按实测重写。
 
-**D-11 · `README` §13 的「接口总览」表可用**（与代码逐条核对一致，端点集合无遗漏、无杜撰），但缺少"权限/错误语义"两列，建议在 F11 一并补。
+**D-11 · `README` §13 的「接口总览」表可用**（与代码逐条核对一致，端点集合无遗漏、无杜撰），但缺少"权限/错误语义"两列，建议在 F11 一并补。 —— **✅ 已于 F11（2026-10-07）补齐**：`端点` 一列已是"一行多端点"，再加字面列会无法逐端点归属，故改用行内 `⚙` 标记（= 额外要求 `LAB_ADMIN`，共 18 个，与源码 `@RequireRole` 计数一致）+ 表下"仅前两个公开"说明；另新增两张表：**错误语义**（401/403 空体、403 带体、400、500、404 六种情形，全部实测）与**「资源不存在」的两种形态**（`/laboratory/{id}` 是 `Result.ok(null)`，`/equipment|reservation-batch|reservation-dlq/{id}` 是 `Result.fail`，`/reservation/{id}` 是 403 且与他人记录同形）。
 
 ---
 

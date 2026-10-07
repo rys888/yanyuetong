@@ -64,20 +64,16 @@
             </span>
           </div>
 
-          <div
-            v-if="batchState === 'loading'"
-            v-loading="batchState === 'loading'"
-            class="batch-loading"
-          />
-          <p v-else-if="batchState === 'error'" class="batch-message">
-            批次加载失败：{{ batchErrorMessage }}
-          </p>
-          <p
+          <LoadingBlock v-if="batchState === 'loading'" />
+          <EmptyState v-else-if="batchState === 'error'" :title="`批次加载失败：${batchErrorMessage}`">
+            <template #action>
+              <el-button type="primary" @click="loadBatches(equipment.id)">重试</el-button>
+            </template>
+          </EmptyState>
+          <EmptyState
             v-else-if="batchState === 'ready' && batchRecords.length === 0"
-            class="batch-message"
-          >
-            该设备暂无预约批次
-          </p>
+            title="该设备暂无预约批次"
+          />
           <template v-else>
             <el-table :data="batchRecords" border>
               <el-table-column label="使用时段" min-width="320">
@@ -129,6 +125,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { fetchEquipmentById } from '../../api/equipment.js'
 import { fetchReservationBatchPage } from '../../api/reservationBatch.js'
 import EmptyState from '../../components/EmptyState.vue'
+import LoadingBlock from '../../components/LoadingBlock.vue'
 import PageHeader from '../../components/PageHeader.vue'
 import StatusTag from '../../components/StatusTag.vue'
 import { PAGE_SIZE } from '../../constants/pagination.js'
@@ -169,6 +166,8 @@ async function loadDetail() {
     return
   }
   if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
     return
   }
   if (result.kind === 'business' || (result.kind === 'ok' && result.data === null)) {
@@ -208,6 +207,8 @@ async function loadBatches(id) {
     return
   }
   if (result.kind === 'unauthorized') {
+    batchErrorMessage.value = result.message
+    batchState.value = 'error'
     return
   }
   if (result.kind === 'ok') {
@@ -279,20 +280,9 @@ watch(() => route.params.id, loadDetail, { immediate: true })
   font-size: 17px;
 }
 
-.batch-count,
-.batch-message {
+.batch-count {
   color: #606266;
   font-size: 14px;
-}
-
-.batch-loading {
-  min-height: 130px;
-}
-
-.batch-message {
-  margin: 0;
-  padding: 34px 12px;
-  text-align: center;
 }
 
 .batch-more {
@@ -303,7 +293,7 @@ watch(() => route.params.id, loadDetail, { immediate: true })
   font-weight: 600;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   :deep(.el-descriptions__body) {
     overflow-x: auto;
   }

@@ -146,6 +146,8 @@ async function loadEquipment() {
     return
   }
   if (result.kind === 'unauthorized') {
+    errorMessage.value = result.message
+    state.value = 'error'
     return
   }
   if (result.kind === 'ok') {
@@ -284,13 +286,13 @@ onMounted(loadFilterOptions)
   margin-top: 20px;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 1200px) {
   .filter-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 560px) {
   .filter-panel {
     grid-template-columns: 1fr;
   }
