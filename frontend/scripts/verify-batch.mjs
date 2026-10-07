@@ -241,7 +241,15 @@ async function verifyGroupA() {
       /resolveStatus\s*\(\s*['"]BookingState['"]\s*,\s*bookingState\.value\s*\)/,
     )
     assert.match(source, /actions\s*\.\s*includes\s*\(\s*['"]submit['"]\s*\)/)
-    assert.match(source, /:disabled\s*=\s*['"]!canSubmit['"]/)
+    const submitButton = [...source.matchAll(/<el-button\b[^>]*>/gs)]
+      .map((match) => match[0])
+      .find((tag) => /@click\s*=\s*['"]handleSubmit['"]/.test(tag))
+    const disabledExpression = submitButton?.match(/:disabled\s*=\s*['"]([^'"]+)['"]/)?.[1]
+    assert.match(disabledExpression ?? '', /^\s*!canSubmit\s*\|\|\s*submitting\s*$/)
+    assert.deepEqual(disabledExpression?.match(/!?[A-Za-z]\w*/g), [
+      '!canSubmit',
+      'submitting',
+    ])
   })
 
   await check('A', 'batch detail contains no status literal comparisons', async () => {
@@ -260,38 +268,48 @@ async function verifyGroupA() {
     assert.doesNotMatch(source, /Date\s*\.\s*now\s*\(/)
   })
 
-  await check('A', 'frontend has no reservation submit API or exact submit endpoint call', async () => {
-    assert.equal(await pathExists(path.join(SRC_ROOT, 'api', 'reservation.js')), false)
+  await check('A', 'reservation submit API is exact and later-phase calls remain absent', async () => {
+    const reservationApiPath = path.join(SRC_ROOT, 'api', 'reservation.js')
+    assert.equal(await pathExists(reservationApiPath), true)
+    const reservationApiSource = await readFile(reservationApiPath, 'utf8')
+    assert.match(
+      reservationApiSource,
+      /export\s+function\s+submitReservation\s*\(\s*batchId\s*\)\s*\{\s*return\s+request\s*\(\s*\{\s*method\s*:\s*['"]post['"]\s*,\s*url\s*:\s*['"]\/reservation['"]\s*,\s*data\s*:\s*\{\s*batchId\s*\}\s*\}\s*\)\s*\}/s,
+    )
+    assert.equal(
+      (reservationApiSource.match(/url\s*:\s*['"]\/reservation['"]/g) ?? []).length,
+      1,
+    )
+
     const sourceFiles = await collectSourceFiles(SRC_ROOT)
     for (const file of sourceFiles) {
       const source = await readFile(file, 'utf8')
       const relativePath = path.relative(FRONTEND_ROOT, file)
-      assert.doesNotMatch(source, /\bPOST\s+\/reservation\b/i, relativePath)
-      assert.doesNotMatch(source, /['"]\/reservation['"]/, relativePath)
+      assert.doesNotMatch(source, /\/reservation\/manage\/page/, relativePath)
+      assert.doesNotMatch(
+        source,
+        /\/reservation\/(?:\$\{[^}]+\}|[^/'"`]+)\/(?:request|cancel|verify)\b/,
+        relativePath,
+      )
     }
+
+    const reservationNamedViews = (await collectSourceFiles(path.join(SRC_ROOT, 'views')))
+      .filter((file) => /reservation/i.test(path.basename(file)))
+      .map((file) => path.relative(FRONTEND_ROOT, file))
+      .sort()
+    assert.deepEqual(reservationNamedViews, ['src/views/reservation/ReservationListView.vue'])
   })
 
-  await check('A', 'reservation views and admin routes remain outside this phase', async () => {
-    assert.equal(await pathExists(path.join(SRC_ROOT, 'views', 'reservation')), false)
-
+  await check('A', 'admin routes and views remain outside this phase', async () => {
     const adminRoute = routes.find((route) => route.path === '/admin')
     assert.deepEqual(
       adminRoute?.children?.map((route) => [route.path, route.name]),
       [['', 'admin-home']],
     )
 
-    const routeSource = await readSource('src/router/routes.js')
-    assert.doesNotMatch(routeSource, /path\s*:\s*['"]\/?reservations(?:\/|['"])/)
-
     const { stdout } = await execFileAsync(
       'git',
-      [
-        'status',
-        '--porcelain',
-        '--',
-        'frontend/src/views/admin',
-        'frontend/src/views/reservation',
-      ],
+      ['status', '--porcelain', '--', 'frontend/src/views/admin'],
       { cwd: REPOSITORY_ROOT },
     )
     assert.equal(stdout.trim(), '')
