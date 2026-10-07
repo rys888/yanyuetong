@@ -99,6 +99,12 @@ export const routes = [
         component: () => import('../views/admin/equipment/AdminEquipmentListView.vue'),
         meta: { title: '我的设备', menu: { title: '我的设备', icon: 'Cpu', order: 3 } },
       },
+      {
+        path: 'batches',
+        name: 'admin-batch-list',
+        component: () => import('../views/admin/batch/AdminBatchListView.vue'),
+        meta: { title: '我的批次', menu: { title: '我的批次', icon: 'Calendar', order: 4 } },
+      },
     ],
   },
   {

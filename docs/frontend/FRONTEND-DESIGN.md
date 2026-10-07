@@ -630,6 +630,22 @@ mock 框架、测试框架（F0–F11 均不引入）、`unplugin-auto-import` /
 
 ⑦ **`verify-batch.mjs` 那条 `admin routes and views remain outside this phase` 断言被 F7 合法击穿，处理方式是"收紧"而非删除。** 它原本断言两件事：`/admin` 的子路由恰好是 `[['', 'admin-home']]`；且 `frontend/src/views/admin` 的 `git status` 为空。前者 F7 必然破坏（要加两条路由），后者更荒谬 —— **F7 就是这个目录的 owner，留着它等于断言 F7 不许做自己**。改法：把语义从"管理端整体尚未实现"收紧为"**F8/F9/F10 的管理端域尚未越界**" —— 子路由白名单从 1 项**精确**更新为 3 项（仍是深等白名单，不是"非空即可"），`git status` 那条**替换**为"`src/views/admin/**` 下不存在文件名匹配 `/batch|reservation|dlq/i` 的文件"。**一条换一条，A 组条数维持 13 不变**（与 F5 的 R5、F6 的同类先例一致：边界改法只能收紧、不能靠删除断言来"通过"）。
 
+#### F8 相对本表的设计决定（派发前记录，非事后追认）
+
+① **归属过滤完全在后端，前端零过滤 —— D-2 裁定的直接延续。** `ReservationBatchMapper.xml` 的 manage 分页 SQL 带 `l.admin_user_id = #{adminUserId}`，F8 不新增任何前端侧归属判断（前端也**没有**字段可判：`ReservationBatchVO` 只有 `laboratoryId`/`equipmentId`）。越权由后端 `assertEquipmentManageable` 拦下并透传 `无权管理该实验室`。附带事实：现有 15 个批次**全部**属于设备 8/11/12（实验室 3/4，属管理员 1019），故 token 持有者 1016 的 manage 页**初始为空** —— 判据①的对比证据天然存在，判据③必须靠新建夹具。
+
+② **管理端状态白名单是全部 4 个状态，因此 `buildManageBatchQuery` 与 `buildBatchQuery` 并存、各自单点。** 学生端 `buildBatchQuery` 的白名单是 `['PUBLISHED','CLOSED']`（镜像后端 `queryBatchPage` 的闸门），而 `queryManagePage` **不做状态闸门**，4 个状态都能筛。复用学生端 builder 会让管理端**永远筛不到草稿**。两条 builder 同行并列，白名单分别锁死。
+
+③ **判据⑥ 靠表单的 `value-format` 结构性保证：4 个时间字段一律 `el-date-picker type="datetime" value-format="YYYY-MM-DD[T]HH:mm:ss"`。** 机理已用**零副作用对照实验**实测确证（不采信推断）：发空格格式 `"2027-06-01 10:00:00"` → **400 `请求体格式错误`**（Jackson `HttpMessageNotReadableException` → `WebExceptionAdvice`）；发 `T` 格式但故意缺 `totalQuota` → **400 `批次必填字段不能为空`**，后者证明 `T` 格式**能被 Jackson 接受**（否则会停在格式错误那一关）。两条都不建任何行（批次表前后同为 15 行）。
+
+④ **表单只做 required 校验，不做任何跨字段校验**（不校验 `endTime > startTime`，也不校验 `bookingEndTime ≤ startTime`）。理由：判据④要求「发布校验逐条可触发」——前端若先把这些组合拦下，**就再也触发不到后端那条文案**了。后端 `createBatch` 本身也只做非空校验（`validateCreateShape`），因此"能建成形状合法但语义非法的草稿"是**后端既有设计**，前端不该替它兜。后端是唯一权威。
+
+⑤ **设备下拉做成二级的（先选实验室，再按 `laboratoryId` 取设备）**，因为 `/equipment/page` 每页大小在后端硬编码为 5、`EquipmentQueryDTO` **没有 size 字段**、也没有任何非分页端点。当前种子数据每室 ≤4 台设备，按室过滤后可完整列出；若直接列全库 12 台，下拉只会有前 5 台。编辑时把当前行的设备**并入选项**（F7 的 D-13 兜底复用），避免显示裸 id。**残留缺口如实登记**：某实验室设备超过 5 台时，新建路径的下拉仍会静默少列（D-13 同族，只兜住了编辑路径）。
+
+⑥ **四条既有断言被 F8 合法击穿，全部"收紧而非删除"，A 组条数不变。** 两条在 `verify-batch.mjs`（`/admin` 子路由白名单、`reservationBatch` API 只许两个只读 GET），两条在 `verify-admin.mjs`（三条菜单项、后续管理端域尚不存在）。收紧方向：子路由白名单 3→4 项（仍是排序后精确集合相等）；`views/admin/**` 的禁止正则 `/batch|reservation|dlq/i` **缩窄为** `/reservation|dlq/i`；`reservationBatch` 那条从"恰好 2 个只读导出"改为**导出名精确集合（8 个）+ 方法计数（get 3 / post 4 / put 1）+ URL 字面量精确集合（7 条）**，并**新增**对 F9/F10 端点的全仓禁止。**这是 F5 R5 → F6 → F7 的第四次复用**：`batch` 从禁止集移出，`reservation`/`dlq` 留在里面。
+
+⑦ **判据⑤ 的夹具与清理口径 —— 我的判据写错了，由 Codex 以 `DESIGN DECISION REQUIRED` 挡下。** 我在 Packet 里同时要求「夹具执行 close 并确认 `CLOSED`」和「本轮所有自建批次终态为 `CANCELLED`」，二者**互斥**：后端 `cancel` 只接受 `DRAFT`/`PUBLISHED`，`CLOSED` **原理上无法取消**，而批次又没有删除端点。Codex 没有自行拍板，而是显式标出卡点要求裁定 —— 这是 Packet 协议期望的行为。**修正后的口径**：恰好一个夹具终态为 `CLOSED`（单独断言），其余全部 `CANCELLED`，且**没有任何夹具停留在 `DRAFT`/`PUBLISHED`**；清理逻辑按「读回 status，仅 `DRAFT`/`PUBLISHED` 才调 cancel」判定跳过。那条 `CLOSED` 夹具行会永久留在库里，**由主控事后直接清库**（同 F7 手工删除孤儿实验室 9348 的先例）。
+
 ---
 
 ## 10. 每个 Phase 的验收标准与人工测试流程
@@ -1117,6 +1133,87 @@ F6 需要 `POST /reservation/{id}/cancel` 与一个新的 reservation 视图，�
 - **仪器 `4c` 的提示采集为空**（`提示=""`）：ElMessage 去重窗口把上一条「状态已更新」也滤掉了。**该条断言的是状态列而非提示**，故不影响结论；但提示采集在"连续两次同类操作"下不可靠，是仪器的已知弱点。
 - **浏览器仪器与判别脚本仍是 `/tmp` 下的临时件、不入库**（同 F2–F6 惯例）：`/tmp/f7-cdp-verify.mjs`（19 断言，零依赖 CDP）+ `/tmp/f7-mutation-check.py`（9 变异）。
 - **观感判断只能人眼确认**（同 F3–F6）；**D-2**（已裁定 F7 不动后端、按判据⑤走）、**D-5**（管理员看单个预约详情，F9 建议行内抽屉）、**D-13**（见上）继续挂账。
+
+---
+
+### F8 验收实测记录（2026-10-07，Claude 独立实测）
+
+**边界证明（我自己数的，不采信 Codex 自述）**：`git status --porcelain` 共 8 项，其中 **7 项属 F8**（改 6：`docs/frontend/FRONTEND-DESIGN.md`、`frontend/scripts/verify-admin.mjs`、`frontend/scripts/verify-batch.mjs`、`frontend/src/api/reservationBatch.js`、`frontend/src/router/routes.js`、`frontend/src/utils/query.js`；增 1：`frontend/src/views/admin/batch/`）。第 8 项 `docs/study/` **与 F8 无关、且是凭据地雷**，提交时必须逐条显式列路径排除（**绝不能用 `git add -A`**）。
+
+**后端零接触**：`git status --porcelain` 中无任何后端路径（无 `src/main`、无 `.java`、无 `pom.xml`）。判据①–⑥ 所依赖的"后端已具备的能力"**全部是既有实现**——F8 只新增了前端侧的调用与 UI，没有为了前端方便改任何后端接口。`frontend/src/constants/`（含 `statusMap.js` 的 `ReservationBatchStatus.actions`）**也是零改动**：F8 是该表的**第一个消费者**。
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `node scripts/verify-admin.mjs`（带真实后端） | **A 20 PASS + B 24 PASS / 0 FAIL / 0 SKIP（合计 44）** | **连跑两次均 44/44**，幂等成立 |
+| **浏览器仪器（F8，32 断言）** | **32 PASS / 0 FAIL / 0 崩溃** | CDP 直连，五段全跑完 |
+| `npm run check:batch`（带真实后端 + C 组夹具 11011） | **A 13 + B 6 + C 3 = 22 PASS / 0 FAIL / 0 SKIP** | C 组此前一直 SKIP，本次用现成的 PUBLISHED+OPEN 批次补齐 |
+| `npm run check:browse` | **37 PASS / 0 FAIL** | 未回归 |
+| `npm run check:reservation` | **32 PASS / 0 FAIL** | 未回归 |
+| `npm run check:session` | **24 PASS / 0 FAIL** | 另 3 条需 `VERIFY_CODE`，未跑 |
+| `npm run check:request` | **26 PASS / 0 FAIL** | **本机无 Codex 沙箱的 `listen EPERM`**（沙箱禁绑 127.0.0.1，故该组在 Codex 侧永远是失败项） |
+| `npm run build` | **exit 0** | 生成独立 `AdminBatchListView-*.js` 懒加载分包（10.19 kB），路由级切分生效；仅既存大 chunk 警告 |
+| DB 复核 | **基线 15 行 / max_id 11015 / 0 残留夹具** | 我建的 41 行残留已核验零引用后清除 |
+
+#### §10 判据 ①–⑥ 的落点
+
+| 判据 | 落点与实测证据 |
+|---|---|
+| ① 新建批次后为 `DRAFT` | 仪器建批次后**未发布**即重取列表，状态列显示 `草稿`；仪器 B 组 `created draft is owned by the admin and absent from the public page` 另证 **DRAFT 不出现在公开页**（`publicOnly` 只放 PUBLISHED/CLOSED）——两条一起证明"草稿是草稿、且学生看不见" |
+| ② 草稿可编辑、非草稿编辑被拒 | 仪器 `2b/2c`：草稿行动作集**恰好** `编辑/发布/取消`；点「编辑」对话框带出原值并可保存。发布后同一行动作集变为 **`关闭/取消`（无编辑）**——**按钮层面就不可达**。后端侧：B 组 `published batch rejects further edits with the exact backend message` 绕过 UI 直接 `PUT /reservation-batch` → 400 **`仅草稿批次可修改`**。第三条独立证据：仪器确认**表单里没有跨字段校验**，非草稿的非法值能一路发到后端（见判据④） |
+| ③ 发布成功后 `PUBLISHED` 且剩余名额=总名额 | B 组 `draft total quota can be updated`（改草稿名额 5→6 成功）→ `publishing initializes remaining quota and status from the saved draft`：发布后重取 `status=PUBLISHED`、`totalQuota=6`、**`remainingQuota=6`**（等于总名额，不是沿用旧值）。这条的**前提是夹具窗口没被既有批次挡住**——见下方 R2 |
+| ④ 四条发布校验逐条可触发并展示对应中文 | **仪器做法：先证明"前端不拦截"，再证明"后端文案经 UI 透传"**——四条夹具**都能被前端建成草稿**（表单只有 `required`，无跨字段校验），点「发布」后页面逐条展示后端原文：**`同一设备的使用时段不能重叠`**（时段重叠）／**`预约截止时间不能晚于使用开始时间`**（预约截止晚于使用开始）／**`设备当前不可预约`**（设备 2 处于维护中）／**`总名额必须大于等于1`**（名额 0）。B 组另用 HTTP 直连对同样四条各断言一次**精确文案**（不经过 UI），两层互为对照 |
+| ⑤ 关闭后批次不可再被预约 | **两层证据。** 后端闸门矩阵（零副作用，`tb_reservation` 前后均 6 行）：`DRAFT`→`批次当前不可预约`；`CANCELLED`→`批次当前不可预约`；**`CLOSED`→`批次当前不可预约`**；`999999`→`预约批次不存在`。**阳性对照**：`PUBLISHED 但已截止`→`预约已截止`、`PUBLISHED 但未开始`→`预约尚未开始`——这两条**穿过了状态闸门**，证明闸门是按状态判别而非"非 PUBLISHED 一律拒"。机理：`ReservationServiceImpl:92` 的 `status != PUBLISHED` 判断位于 `:108` 的 `redisIdWorker.nextId()` **之前**，故一切状态拒绝都零副作用。UI 侧：仪器 `3c` 关闭后该行动作集**为空集**，且`关闭`**不回写名额列**（仍显示 `5 / 5`）——与后端"只清 Redis 键、不回写 MySQL"的实现一致 |
+| ⑥ 表单提交的日期字符串带 `T` | **最强证据是浏览器实际发出的请求体**（CDP `Network.requestWillBeSent.postData`）：`POST /api/reservation-batch`，`{"equipmentId":"1","startTime":"2027-06-01T10:00:00","endTime":"2027-06-01T12:00:00","bookingStartTime":"2026-10-08T09:00:00","bookingEndTime":"2027-05-31T09:00:00","totalQuota":5}` —— **四个日期字段全部带 `T`**。静态锁：四个 `el-date-picker` 必须逐个含 `value-format="YYYY-MM-DD[T]HH:mm:ss"`（**逐个**断言，缺一个就红——变异 M3 证明）。反向对照：B 组 `space-separated batch datetimes are rejected without creating a fixture` 把同一载荷的 `T` 换成空格 → 400 **`请求体格式错误`**，且**夹具总数不变**（先证零副作用）；立刻再用带 `T` 的同一载荷（删掉 `totalQuota`）→ 400 **`批次必填字段不能为空`**，证明"能穿过反序列化、走到业务校验" |
+
+#### 仪器自身的坑（第 9–11 个）
+
+1. **第 9 个 · ElMessage 的存活窗口会让"应用正确"伪装成"提示为空"。** 试跑第二轮 27 PASS / 5 FAIL，**5 条全是 `提示=""`**，且**紧随其后的断言全部 PASS**（行确实落库、状态正确、拒绝文案正确）——即应用是对的。根因：`withMessages` 内层 `sleep(1200)` + 外层 `sleep(2400)` = **3600 ms > ElMessage 默认 3000 ms**，读 `after` 时 toast 已消失。**这是 F7 记录过的同类陷阱的第二次现身。** 已修两处：内层不再 sleep；**主证据改用"行出现"这种确定性判据，toast 只当旁证**。教训：**不要用短命 UI 元素当断言主证据。**
+2. **第 10 个 · 把实验室认错，让仪器错误伪装成应用缺陷。** 我初版把 `计算与样品制备中心` 当成实验室 2，实际它是**实验室 4（属 1019）**，于是设备下拉里出现的是 `超速离心机|冷冻切片机|高性能计算节点|GPU 工作站`，看起来像"二级联动错了"。真值是 **lab 2 = 分析测试实验室**。已修：改正常量。**同族于 F7 的"用组件目录名当路由路径"。**
+3. **第 11 个 · 段内异常留下的对话框会毒害下一段。** 段 4 抛错后**对话框留在打开状态**，段 5 点「新建批次」撞上陈旧 popper → 取到空下拉（`no-item:`）。已修：新增 `closeAnyDialog()` 并在每节开始前调用；同时补 `fillBatchForm()` 收敛重复填充逻辑。**这是"段级隔离"只隔离了断言、没隔离 DOM 状态**——`guard()` 保住了下游证据，但没保住下游的**前提干净**。
+
+#### 证伪实验（12 个变异，复原后逐字节一致）
+
+**打在生产文件上**（`AdminBatchListView.vue` / `utils/query.js` / `api/reservationBatch.js` / `router/routes.js`），复原用内存快照 + `sha256` 校验（**不用 `git checkout`**——F8 改动全部未暂存，且 `views/admin/batch/` 是**未跟踪**目录，从索引根本恢复不了）。跑变异时**不注入 `VERIFY_BACKEND`/`VERIFY_TOKEN`**，只跑 A 组，**零 DB 副作用**。
+
+| 变异 | 改坏什么 | 期望 | 实际 | 变红断言 |
+|---|---|---|---|---|
+| M1 | 管理端状态白名单退化成公开两态 | FAIL | **CAUGHT** | `manage batch query accepts all four statuses...` |
+| M2 | 绕过状态元数据，动作写死字面量 | FAIL | **CAUGHT** | `batch actions come only from status metadata...` |
+| M3 | 四个日期选择器之一丢掉 `T` | FAIL | **CAUGHT** | `all four batch datetime pickers preserve the required T separator` |
+| M4 | `handlePublish` 写后不重取（乐观更新） | FAIL | **CAUGHT** | `batch writes reload, surface backend errors...` |
+| M5 | 加载路径也弹 toast（F7 R3 已判定的回退） | FAIL | **CAUGHT** | 同上（反向半边） |
+| M6 | 摘掉设备选项的乱序覆盖守卫 | FAIL | **CAUGHT** | `dependent equipment options discard stale laboratory responses` |
+| M7 | 管理端分页端点改名 | FAIL | **CAUGHT** | `reservationBatch API exposes the exact F8 read and write surface` |
+| M8 | 摘掉 `/admin` 的 `meta.roles` | FAIL | **CAUGHT** | `new admin routes inherit roles from the parent` + `verify-batch` 白名单 |
+| M9 | 越界预埋 F9 的管理端预约记录域 | FAIL | **CAUGHT** | 菜单四项精确集合 + 后续域禁止 |
+| M10 | 管理端改用学生端 builder | FAIL | ~~SURVIVED~~ → **CAUGHT** | 首轮**全绿通过**，返工后新增加锁（见 R3） |
+| M11 | 取消批次不尊重二次确认的「返回」 | FAIL | ~~SURVIVED~~ → **CAUGHT** | 同上 |
+| M12 | 载荷多带 `laboratoryId` | FAIL | **SURVIVED** | **无断言——记录在案的已知缺口**，不上锁（见下） |
+
+**M10 是这轮最有价值的一条**，与 F7 的 M8 同族：`manage batch query accepts all four statuses...` 锁住的是 **`query.js` 里的函数本体**，**没有任何断言锁住视图调用的是哪一个**。把视图换成学生端 builder（连 import 一起换），**整套 A+B 组全绿**——而后果是实质性的：管理端会退化成只能筛 PUBLISHED/CLOSED，**草稿与已取消批次永远筛不出来**，正是本 Phase 要防的那个 bug。**"函数被测过"≠"函数被用对了"**：单测的绿光保护不了接线。
+
+**M12 是故意不上锁的**：`formPayload()` 多带 `laboratoryId` 无任何断言拦，但后端 `createBatch` **从不写 `laboratory_id`**（DB 里该列为 null，`laboratoryName` 是靠 `LEFT JOIN tb_equipment → tb_laboratory` 解析出来的），`updateDraft` 也**从不触碰**该列，故当前**无实际影响**。按"不过度设计"原则登记为已知缺口，不加锁。
+
+#### Review 发现的问题（3 项，两轮批量返工）
+
+1. **R1 · `verify-batch.mjs` 里有一条永久空转的守卫。** 原断言 `assert.doesNotMatch(fileSource, /\/reservation\/\{id\}\/verify/)` 要求**字面量** `{id}`，而 F9 真实写法是模板字面量 `` `/reservation/${id}/verify` ``（`$` 夹在 `/` 与 `{` 之间）。**正负对照实测**：`` "url: `/reservation/${id}/verify`" `` → **NO-MATCH（守卫放过）**；`"url: \"/reservation/{id}/verify\""` → MATCH。且 `command grep -rn 'reservation/{id}' src/ scripts/` **全仓 0 命中** —— 该断言在任何现在或未来的代码上都永远为真。已修：正则改为匹配真实模板写法，并**在正则使用点正上方加一条纯字符串阳性对照**（`assert.match('url: \`/reservation/${id}/verify\`', pattern)`）——**正则一旦退化回字面量形式，这条自证立刻变红**，不会再悄悄失效。
+2. **R2 · 自适应选窗漏扫 `DRAFT`，且设备 9 仍在用硬编码窗口。** `nextAvailablePrimaryPayload()` 只遍历 `['PUBLISHED','CLOSED']`，但重叠查询是 `.ne(status, CANCELLED)` —— **`DRAFT` 是算数的**。首轮运行前设备 1 上恰有一个孤儿 DRAFT（`2027-06-01T11:00:00`），而主夹具落在 `2027-06-02T04:00:00`，**只差约 15 小时侥幸没重叠**；若它再晚几小时，`publishing initializes remaining quota...` 就会以 `同一设备的使用时段不能重叠` 失败——**看起来像应用缺陷，实际是夹具不自洽**。已修：扫描集合加入 `DRAFT`，helper 泛化为 `nextAvailablePrimaryPayload(backendURL, token, equipmentId = 1)`，并把**唯一必须发布成功**的设备 9 取消夹具也改为动态选窗。**修复的硬证据**是我清除的 41 行残留：设备 1 的 CLOSED 链 `06-01T10:00 → 06-02T04:00 → 06-02T22:00 → 06-03T16:00 → 06-04T10:00 → 06-05T04:00 → 06-05T22:00` **每步 +18 小时单调后移、永不重叠**——**按构造成立**，连跑两次 44/44 亦独立印证。
+3. **R3 · M10/M11 两条真缺口无锁**（见上表）。已新增两条 A 组断言（`admin batch params use the manage query builder`、`batch cancellation stops when confirmation is rejected`），**A 组条数 18 → 20**，重跑变异后两条均翻为 **CAUGHT**。
+
+**Codex 本轮出现"改测试迁就实现"吗？** 没有。而且这次它的**自述与我的独立实测出现分歧时，站在我这边的总是实测**：它报"仅修改两个测试脚本"，我用 `git status` 复核确认生产代码零改动；但它随后**在 M10 注入中途撞上用量上限被切断**，把**故意改坏的 `AdminBatchListView.vue` 留在了工作区**（import 与 `params` computed 都指向学生端 builder）——**这正是"测试全绿"与"代码已坏"能同时成立的那种状态**（若此时有人跑一次 `check:admin` 的 B 组，A 组全绿、B 组全绿，而管理端已经废了）。我靠**变异前用 `sha256` 拍的快照**发现（`43ae5f99…` ≠ `931d1666…`），逐行回补两处后**哈希逐字节回到 `931d1666…`**才算通过。**教训：变异实验必须在跑之前拍哈希、跑完对哈希；且中断信号要当成"工作区可能已坏"来处理，而不是"这次没跑完"。**
+
+#### 边界改法：F8 合法击穿四条既有断言，全部"收紧而非删除"
+
+同 F5 R5 → F6 → F7 的**第四次复用**，明细已写在 §9 的 F8 设计决定⑥（子路由白名单 3→4 项精确集合；`views/admin/**` 禁止正则 `/batch|reservation|dlq/i` 缩窄为 `/reservation|dlq/i`；`reservationBatch` 从"恰好 2 个只读导出"改为**导出名精确集合（8 个）+ 方法计数（get 3 / post 4 / put 1）+ URL 字面量精确集合（7 条）**）。**A 组条数在 F8 之前 18、之后 20（+2 条新锁），无一条被删除或弱化**——`git diff` 的删除行全部是改名与更强的替换。
+
+#### 迄今仍未覆盖
+
+- **判据① 的归属过滤仍只有后端证据**：前端**原理上无字段可判**（`ReservationBatchVO` 只有 `laboratoryId`/`equipmentId`，不含 `adminUserId`，**D-2**）。且现有 15 个批次**全部属于设备 8/11/12（实验室 3/4，属管理员 1019）**，故 token 持有者 1016 的 manage 页**初始为空**——判据①的"越权看不见"与"自己也看不见草稿"在初始数据上**无法区分**，**必须靠新建夹具才算验过**（B 组已如此做）。
+- **判据⑤ 的浏览器端没点**：学生端没有指向 CLOSED 批次的入口可点，该判据在 **API 层**验（`POST /reservation` → `批次当前不可预约`，`tb_reservation` 6→6 零副作用）。另有 `PUBLISHED 已截止`/`PUBLISHED 未开始` 两条阳性对照。
+- **M12 已知缺口**：`formPayload()` 多带 `laboratoryId` **无断言**，摘/加都全绿；理由是后端当前忽略该字段（见上）。**这是记录在案的缺口。**
+- **D-13 族在本 Phase 再次现身**：`/equipment/page` 被后端钳每页 5 条，故**实验室设备超过 5 台时，新建批次的设备二级下拉会静默少列**。F8 只兜住了**编辑**路径（把当前行的设备并入下拉），**新建**路径仍受限——与 F7 的 D-13 同一根因、同一处理（挂账）。
+- **仪器与判别脚本仍是 `/tmp` 下的临时件、不入库**（同 F2–F7 惯例）：`/tmp/f8-cdp-verify.mjs`（32 断言，零依赖 CDP）+ `/tmp/f8-mutation-check.mjs`（12 变异，含自动复原与哈希校验）+ `/tmp/f8-evidence.md`。
+- **观感判断只能人眼确认**（同 F3–F7）；**D-2**（已裁定 F8 不动后端）、**D-5**（管理员看单个预约详情，F9 建议行内抽屉）、**D-13**（见上）继续挂账。
 
 ---
 
