@@ -12,7 +12,8 @@
     "check:browse": "node scripts/verify-browse.mjs",
     "check:admin": "node scripts/verify-admin.mjs",
     "check:batch": "node scripts/verify-batch.mjs",
-    "check:reservation": "node scripts/verify-reservation.mjs"
+    "check:reservation": "node scripts/verify-reservation.mjs",
+    "check:dlq": "node scripts/verify-dlq.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "2.3.2",

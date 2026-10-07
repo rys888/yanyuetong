@@ -317,7 +317,7 @@ async function verifyGroupA() {
     ])
   })
 
-  await check('A', 'admin routes stay inside the F8 surface and later admin domains do not exist yet', async () => {
+  await check('A', 'admin routes and domains are exactly the ones through F10', async () => {
     const adminRoute = routes.find((route) => route.path === '/admin')
     // 白名单而非"非空即可"：F9 加预约记录、F10 加死信时必须显式更新这里。
     assert.deepEqual(
@@ -328,18 +328,22 @@ async function verifyGroupA() {
         ['equipment', 'admin-equipment-list'],
         ['laboratories', 'admin-laboratory-list'],
         ['reservations', 'admin-reservation-list'],
+        ['dlq', 'admin-dlq-list'],
+        ['dlq/:id', 'admin-dlq-detail'],
       ].sort(),
     )
     assert.deepEqual(adminRoute?.meta?.roles, ['LAB_ADMIN'])
 
-    // 原断言的意图 = "后续 Phase 的管理端域尚未进入"。F8 之后 admin 目录归 F7/F8 所有，
-    // 所以把它从"目录不许有改动"收紧为"目录里不许出现后续 Phase 的域"。
-    const adminViews = (await collectSourceFiles(path.join(SRC_ROOT, 'views', 'admin')))
-      .map((file) => path.relative(FRONTEND_ROOT, file))
-    assert.ok(adminViews.length > 0, 'admin 视图目录不应为空')
-    for (const file of adminViews) {
-      assert.doesNotMatch(file, /dlq/i, file)
-    }
+    // 精确锁定 F10 已交付的管理端域，后续 Phase 必须显式更新白名单。
+    const adminEntries = await readdir(path.join(SRC_ROOT, 'views', 'admin'))
+    assert.deepEqual(adminEntries.sort(), [
+      'AdminHomeView.vue',
+      'batch',
+      'dlq',
+      'equipment',
+      'laboratory',
+      'reservation',
+    ])
   })
 
   await check('A', 'reservationBatch API exposes the exact F8 read and write surface', async () => {
@@ -387,7 +391,11 @@ async function verifyGroupA() {
         assert.doesNotMatch(fileSource, /\/reservation\/manage\/page/, relativePath)
         assert.doesNotMatch(fileSource, reservationVerifyPathPattern, relativePath)
       }
-      assert.doesNotMatch(fileSource, /\/reservation-dlq/, relativePath)
+      if (relativePath === 'src/api/dlq.js') {
+        assert.match(fileSource, /\/reservation-dlq/)
+      } else {
+        assert.doesNotMatch(fileSource, /\/reservation-dlq/, relativePath)
+      }
     }
   })
 }

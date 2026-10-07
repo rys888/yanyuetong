@@ -111,6 +111,8 @@ export const routes = [
         component: () => import('../views/admin/reservation/AdminReservationListView.vue'),
         meta: { title: '预约记录', menu: { title: '预约记录', icon: 'Tickets', order: 5 } },
       },
+      { path: 'dlq', name: 'admin-dlq-list', component: () => import('../views/admin/dlq/DlqListView.vue'), meta: { title: '死信治理', menu: { title: '死信治理', icon: 'Warning', order: 6 } } },
+      { path: 'dlq/:id', name: 'admin-dlq-detail', component: () => import('../views/admin/dlq/DlqDetailView.vue'), meta: { title: '死信详情' } },
     ],
   },
   {
