@@ -40,3 +40,7 @@ application-local.yaml
 node_modules/
 dist/
 *.local
+### Benchmark ###
+# 整目录忽略：13 个文件里 password 命中 4、authorization 命中 5，
+# 一次 `git add -A` 就会把真实口令写进不可撤销的历史。需要入库请用 `git add -f`。
+benchmark/
