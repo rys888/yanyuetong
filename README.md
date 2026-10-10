@@ -1,50 +1,82 @@
 # 研约通 · 高校实验资源预约平台
 
-> 把「实验室 / 实验设备 / 预约批次 / 预约单」这套真实业务，用 Spring Boot + Redis + RabbitMQ 做成一个可运行、可验证、并发安全的后端服务。
-> 本仓库由课程项目 **黑马点评（hm-dianping）** 重构而来，详见第 2 节与第 15 节。
+<p>
+  <img alt="Java" src="https://img.shields.io/badge/Java-8-orange?logo=openjdk&logoColor=white">
+  <img alt="Spring Boot" src="https://img.shields.io/badge/Spring_Boot-2.3.12-brightgreen?logo=springboot&logoColor=white">
+  <img alt="MyBatis-Plus" src="https://img.shields.io/badge/MyBatis--Plus-3.4.3-blue">
+  <img alt="MySQL" src="https://img.shields.io/badge/MySQL-8.x-4479A1?logo=mysql&logoColor=white">
+  <img alt="Redis" src="https://img.shields.io/badge/Redis-6.x-DC382D?logo=redis&logoColor=white">
+  <img alt="RabbitMQ" src="https://img.shields.io/badge/RabbitMQ-3.x-FF6600?logo=rabbitmq&logoColor=white">
+  <img alt="Vue" src="https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-8.3-646CFF?logo=vite&logoColor=white">
+  <img alt="Maven" src="https://img.shields.io/badge/Maven-3.6+-C71A36?logo=apachemaven&logoColor=white">
+</p>
+
+> 面向高校实验室场景的**实验资源预约平台**。以 **Redis Lua 原子准入 + RabbitMQ 异步落库 + 定时对账自愈**，
+> 在单体架构下实现 **不超卖、不丢单、可自愈** 的高并发预约服务。
 
 ---
 
-## 1. 项目简介
+## 目录
 
-**研约通** 面向高校实验室的开放预约场景：管理员为某台设备（如「高性能计算服务器」）创建**预约批次**（限定开放时段与名额），学生在该时段内提交预约。系统需要同时满足三条硬要求：
+- [项目简介](#项目简介)
+- [功能特性](#功能特性)
+- [技术栈](#技术栈)
+- [系统架构](#系统架构)
+- [核心预约流程](#核心预约流程)
+- [快速开始](#快速开始)
+- [项目结构](#项目结构)
+- [接口概览](#接口概览)
+- [配置说明](#配置说明)
+- [测试与验收](#测试与验收)
+- [文档索引](#文档索引)
+- [已知边界](#已知边界)
+- [安全提示](#安全提示)
+- [许可证](#许可证)
+
+---
+
+## 项目简介
+
+**研约通** 面向高校实验室的开放预约场景：管理员为一台设备（如「高性能计算服务器」）创建**预约批次**（限定开放时段与名额），学生在时段内提交预约。系统需要同时满足三条硬要求：
 
 | 要求 | 实现要点 |
 |---|---|
-| **不超卖** | Redis Lua 原子脚本「校验 + 扣名额 + 去重」一步完成，数据库侧另有条件更新兜底 |
-| **不丢单** | 请求先落 `tb_reservation_request`（PRE_ACCEPTED）再做异步落库，配合发布确认 + 对账补偿 |
-| **可自愈** | 定时对账任务扫描卡在非终态的请求，自动补偿（回滚名额）或重新投递，超阈值进死信 |
+| **不超卖** | Redis Lua 原子脚本「校验 + 扣名额 + 去重」一步完成，数据库侧另有唯一索引与条件更新兜底 |
+| **不丢单** | 请求先落 `tb_reservation_request`（PRE_ACCEPTED）再做异步落库，配合发布确认 + 定时对账补偿 |
+| **可自愈** | 定时对账任务扫描卡在非终态的请求，自动回滚名额或重新投递，超阈值转死信 |
 
-技术选型刻意克制：**单体应用 + Maven + 单库**，依赖 Redis / RabbitMQ 两个中间件，不引入微服务、注册中心、分库分表、搜索引擎等（见第 14、15 节的设计取舍）。
+技术选型刻意克制：**单体应用 + Maven + 单库**，只依赖 Redis / RabbitMQ 两个中间件，不引入微服务、注册中心、分库分表、搜索引擎。
 
----
-
-## 2. 项目背景（诚实交代）
-
-本仓库前身是**黑马点评**课程项目——一个「探店笔记 + 优惠券秒杀 + 用户社交关注」的演示工程。它提供了一批很有价值的**基础设施能力**：
-
-- Redis 缓存与缓存穿透/击穿防护（`CacheClient` + 互斥锁 + 逻辑过期）
-- Redis 原子 Lua 脚本、Redisson 分布式锁
-- RabbitMQ 异步下单与死信链路（原为「优惠券秒杀」的异步下单迁移产物）
-- 登录会话（Redis token + 双拦截器续期）、MyBatis-Plus、全局异常兜底
-
-重构的做法是：**保留并复用上述基础设施，整体替换业务域**。原课程的业务实体已**永久删除**，不复存在：
-
-| 已删除（原课程） | 现在（研约通） |
-|---|---|
-| 商铺 `tb_shop` / 商铺类型 `tb_shop_type` | 实验室 `tb_laboratory` / 设备分类 `tb_equipment_category` |
-| 探店笔记 `tb_blog` / 笔记评论 `tb_blog_comments` | 设备 `tb_equipment` |
-| 优惠券 `tb_voucher` / 秒杀券 `tb_seckill_voucher` / 券订单 `tb_voucher_order` | 预约批次 `tb_reservation_batch` / 预约单 `tb_reservation` |
-| 用户关注 `tb_follow` / 签到 `tb_sign` / 用户详情 `tb_user_info` | 预约请求 `tb_reservation_request` / 死信 `tb_reservation_dlq` |
-| Redis GEO、Bitmap 签到、HyperLogLog UV、点赞、Feed 推流、共同关注、ZSet 热门榜 | 预约名额（String 计数）+ 去重集合（Set）+ 按日自增 ID（来自 `RedisIdWorker`） |
-
-**保留的库名**：MySQL 库名仍是 `hmdp`（避免迁移期间改动用户既有数据；新装库建议自行改名并同步 `application.yaml`）。表前缀 `tb_` 亦保留。
-
-**关于 git 历史**：本仓库的**历史提交**中包含开发期的明文口令（源自原始课程提交）。当前工作区已全部脱敏（见第 15 节），但**历史未改写**。因此**本仓库在公开前必须先改写历史或轮换口令**——目前它只用于本地开发，未推送到任何公开远端。
+> **项目来源**：本仓库由课程项目 **黑马点评（hm-dianping）** 重构而来——复用其基础设施（缓存、分布式锁、Lua 脚本、MQ、会话），**整体替换业务域**。原课程业务实体已全部删除。完整的「删了什么 / 换成了什么」对照表见 [附录 §1](docs/APPENDIX-实现细节与已知边界.md)。
 
 ---
 
-## 3. 技术栈
+## 功能特性
+
+**学生端**
+
+- 手机号 + 验证码登录（验证码存 Redis，2 分钟有效；会话 token 30 分钟滑动过期）
+- 浏览实验室列表与设备详情（读多写少，走 Redis 缓存）
+- 提交预约：按批次预约，名额有限，同一批次不可重复预约
+- 查看我的预约、取消预约
+
+**管理端**（`LAB_ADMIN` 角色）
+
+- 实验室与设备的增删改（**仅能操作自己负责的实验室**，删除前校验无设备依赖）
+- 为设备创建预约批次，设定开放时段与名额；发布 / 关闭 / 取消批次
+- 查看本实验室的预约列表、核销预约
+- 查看与重放死信队列消息
+
+**系统能力**
+
+- **定时对账**：补偿卡住的下单请求（超阈值回滚名额并置终态，再超阈值转死信）
+- **死信治理**：DLQ 落库 + 人工重放 + 最大重放次数限制
+- **缓存三件套**：空值缓存防穿透、互斥锁重建防击穿、TTL 随机抖动防雪崩
+
+---
+
+## 技术栈
 
 | 层次 | 选型 | 版本 | 说明 |
 |---|---|---|---|
@@ -57,34 +89,14 @@
 | 消息队列 | Spring AMQP / RabbitMQ | starter-amqp | Direct Exchange + 死信队列，手动 ack |
 | 工具 | Hutool | 5.7.17 | 校验、Bean 拷贝、日期 |
 | 测试 | JUnit 5 + Spring Boot Test + Mockito | 3.3.3 | 含 `MockMvc` 行为级用例 |
-| 构建 | Maven | — | 打包坐标 `yanyuetong:0.0.1-SNAPSHOT` |
+| 构建 | Maven | ≥ 3.6 | 打包坐标 `yanyuetong:0.0.1-SNAPSHOT` |
+| 前端 | Vue 3 + Element Plus + Pinia + Vite | 3.5.43 / 2.14.7 / 3.0.4 / 8.3.3 | 独立工程，位于 `frontend/` |
 
 主类：`com.yanyuetong.YanYueTongApplication`，默认端口 **8081**。
 
 ---
 
-## 4. 核心功能
-
-**学生侧**
-- 手机号 + 验证码登录（验证码存 Redis，2 分钟有效；会话 token 30 分钟滑动过期）
-- 浏览实验室列表与设备详情（读多写少，走 Redis 缓存）
-- 提交预约：按批次预约，名额有限，同一批次不可重复预约
-- 查看我的预约、取消预约
-
-**管理员侧（`LAB_ADMIN` 角色）**
-- 实验室与设备的增删改（仅能操作自己负责的实验室；删除前校验无设备依赖）
-- 创建设备的预约批次，设定开放时段与名额
-- 发布 / 关闭 / 取消批次
-- 查看本实验室的预约列表、核销预约（verify）
-- 查看与重放死信队列消息
-
-**系统侧**
-- 定时对账：补偿卡住的下单请求（超阈值进死信）
-- 死信治理：DLQ 落库 + 人工重放 + 最大重放次数限制
-
----
-
-## 5. 系统架构
+## 系统架构
 
 ```
                     ┌────────────────────────────────────────────┐
@@ -115,13 +127,22 @@
                  └────────────┘  └────────────┘  └────────────┘
 ```
 
-**源码规模**：`src/main/java` 99 个文件 / `src/test/java` 16 个测试类。
+**分层职责**
+
+| 层 | 职责 |
+|---|---|
+| Controller | 参数校验与鉴权入口，统一返回 `Result` |
+| 拦截器链 | `RefreshTokenInterceptor`(0) 会话续期 → `LoginInterceptor`(1) 登录校验 → `RoleInterceptor`(2) 角色/归属校验 |
+| Service | 读路径走 `CacheClient`；写路径由 `ReservationService` 编排「请求落库 → Lua 准入 → MQ 投递」；`Reconcile` 定时收口 |
+| 中间件 | Redis 管准入与缓存、RabbitMQ 管异步落库与死信、MySQL 管账实相符 |
+
+**源码规模**：`src/main/java` 99 个文件，`src/test/java` 16 个测试类，REST 端点 33 个，业务表 8 张。
 
 ---
 
-## 6. 高并发预约流程（本项目的核心）
+## 核心预约流程
 
-`POST /reservation` 的完整链路：
+`POST /reservation` 的完整链路——这是本项目所有并发设计汇合的地方：
 
 ```
 ① 取用户、取批次（批次走缓存），计算 BookingState（DRAFT/NOT_STARTED/OPEN/EXPIRED/CLOSED/CANCELLED）
@@ -143,57 +164,10 @@
 **为什么这么设计**
 
 - **临界区收在 Lua 里**：`DECR` + `SISMEMBER` 若分两次调用，两次之间就是超卖窗口。Lua 脚本在 Redis 单线程内原子执行，把「查名额 / 查时段 / 查重复 / 扣减 / 记录」合成一个不可分割的操作。
-- **先落 request 再投递**：Redis 扣减成功后进程若崩溃，名额已扣但没有任何数据库凭据——请求表就是这份凭据，也是第 9 节对账的输入。
-- **数据库不是唯一防线**：`tb_reservation` 上有唯一索引与 `active_flag` 条件更新（见 `phase8_consistency.sql` / `phase9_reservation_lifecycle.sql`），即使 Redis 判重失效也不会写入两条占用中的预约。
+- **先落 request 再投递**：Redis 扣减成功后进程若崩溃，名额已扣但没有任何数据库凭据——请求表就是这份凭据，也是对账任务的输入。
+- **数据库不是唯一防线，而是最后防线**：`tb_reservation` 上有唯一索引与 `active_flag` 条件更新，即使 Redis 判重失效也不会写入两条「占用中」的预约。
 
----
-
-## 7. Redis 设计
-
-| Key | 类型 | TTL | 用途 |
-|---|---|---|---|
-| `login:code:{phone}` | String | 2 min | 登录验证码 |
-| `login:token:{token}` | Hash | **30 min（滑动）** | 登录会话；`RefreshTokenInterceptor` 每次请求续期 |
-| `lab:equipment:{id}` | String(JSON) | 30 min ± 5 min 抖动 | 设备详情缓存 |
-| `lab:equipment:null:{id}` | String | 2 min | 空值缓存，防穿透 |
-| `lock:cache:{id}` | String | 短 | 缓存重建互斥锁（防击穿） |
-| `lock:reservation:reconcile` | String | 短 | 对账任务互斥（多实例只有一个跑） |
-| `reservation:batch:quota:{batchId}` | String | 批次截止 + 24h | **预约名额计数器** |
-| `reservation:batch:users:{batchId}` | Set | 同上 | **已预约用户去重集合** |
-| `icr:reservation:yyyy:MM:dd` | String | 按日 | `RedisIdWorker` 的按日自增序号 |
-
-**设计说明**
-
-- **会话 TTL 从 25 天压到 30 分钟**：因为每次请求都会续期，活跃用户完全无感；但 token 一旦泄漏，可用窗口从 25 天缩短到 30 分钟。改动只有 `RedisConstants.LOGIN_USER_TTL` 一行（单位是**分钟**）。
-- **缓存三件套仍在用**：空值缓存（穿透）、互斥锁重建（击穿）、TTL 随机抖动（雪崩）。这套能力由 `CacheClient` 提供，是重构中「保留基础设施」的典型。
-- **Redis 与 DB 的职责边界**：Redis 负责**高并发准入判定**（快、原子、易失），DB 负责**账实相符**（慢、持久、可对账）。两者用第 9 节的对账机制缝合。
-
----
-
-## 8. RabbitMQ 可靠性
-
-| 项 | 配置 |
-|---|---|
-| Exchange | `reservation.exchange`（Direct，durable） |
-| 队列 | `reservation.create.queue`（durable，绑定 `reservation.create`） |
-| 死信 | `reservation.create.dlq.queue`，绑定 `x-dead-letter-routing-key = reservation.create.dlq` |
-| 发布确认 | `publisher-confirm-type: correlated` + `publisher-returns: true` |
-| 消费 ack | `acknowledge-mode: manual`，`prefetch: 1` |
-| 重试 | `listener.simple.retry.enabled: false`——**有意关闭**，见下 |
-
-**为什么关闭自动重试**：手动 ack 模式下，Spring AMQP 的默认 `RejectAndDontRequeueRecoverer` 并不会真正把消息 nack 进死信，反而会让消费者卡死。因此改为**监听器显式 `basicAck` / `basicNack(requeue=false)`**，并在容器级用 `ConditionalRejectingErrorHandler(rejectManual = true)` 兜住**反序列化失败**这类拿不到 `Channel` 的异常——否则坏消息会无限重投，堵死队列。
-
-**投递侧的失败处理**：`ReservationServiceImpl.publishReservationMessage` 区分三类结果——投递确认失败、`publisher-returns` 退回、`AmqpConnectException`（MQ 不可达）——分别走不同的补偿路径（重试标记 PUBLISHED，或留给对账任务重投）。
-
----
-
-## 9. 数据一致性设计
-
-这是「不丢单」的落点。三个机制叠加：
-
-**① 请求表 = 状态机 + 对账输入**
-
-`tb_reservation_request.status` 有明确的生命周期与终态判定：
+**请求状态机**（`tb_reservation_request.status`）
 
 ```
 PRE_ACCEPTED ──▶ PUBLISHED ──▶ CONFIRMED   （终态）
@@ -202,69 +176,37 @@ PRE_ACCEPTED ──▶ PUBLISHED ──▶ CONFIRMED   （终态）
                     UNKNOWN                 （非终态，需对账）
 ```
 
-`isTerminal()` 只认 `CONFIRMED` / `COMPENSATED`；`PRE_ACCEPTED` / `PUBLISHED` / `UNKNOWN` 都是非终态，即对账任务的扫描对象。
-
-**② 定时对账（`ReservationReconcileServiceImpl`）**
-
-每 `reconcile-interval-ms`（默认 5 分钟）扫描 `create_time < now - reconcile-threshold-ms`（默认 10 分钟）仍处非终态的请求，最多 `reconcile-limit`（默认 200）条：
-
-- 该请求对应的预约**已经落库** → 补一个 `CONFIRMED`，收口；
-- 未落库且**未超过阈值次数** → 记录失败原因并**推进 `update_time`**（让它退出「陈旧」窗口，下一轮再处理），等待重投；
-- 失败次数**超过阈值** → 回滚 Redis 名额（`reservationRollback.lua`，幂等）并置 `COMPENSATED`。
-
-> **两个易错点（已作为缺陷修复并留下回归用例）**
-> 1. `update_time` 必须**显式赋值**。MySQL 的 `ON UPDATE CURRENT_TIMESTAMP` 在「写入值与当前值相同」时**不会**更新时间戳——只改 `fail_reason` 而不显式写 `update_time`，记录会永远留在陈旧窗口里，被反复扫描而无法退避。
-> 2. 回滚写回 `update_time` 时不能写它自己的原值，否则等价于没写（同上原因）。
-
-**③ 数据库层的最后防线**
-
-`phase8_consistency.sql` / `phase9_reservation_lifecycle.sql` 在 `tb_reservation` 上提供唯一索引与 `active_flag` 条件更新：`UPDATE ... SET active_flag = 0 WHERE id = ? AND active_flag = 1`，影响行数为 0 即说明已被并发修改，据此判定 `QUOTA_CONFLICT`。即使 Redis 判重被绕过，也不会出现两条「占用中」的预约。
-
-**Redis 名额与 DB 的关系**：名额只在 Redis 扣减；DB 的预约行存在与否由 MQ 消费决定。二者的收敛由对账任务保证——这也是为什么 `COMPENSATED` 是一个**终态**而不是异常：它表示「这次 Redis 扣减已被明确撤销」。
+`isTerminal()` 只认 `CONFIRMED` / `COMPENSATED`；其余三种都是对账任务的扫描对象。
 
 ---
 
-## 10. 数据库设计
+## 快速开始
 
-**8 张表**（`tb_` 前缀保留）：
+### 1. 环境要求
 
-| # | 表 | 说明 | 建表脚本 |
-|---|---|---|---|
-| 1 | `tb_user` | 用户（`role`: `USER` / `LAB_ADMIN`；手机号唯一索引 `uniqe_key_phone`） | `phase0_baseline.sql` |
-| 2 | `tb_laboratory` | 实验室（`admin_user_id` 指向负责管理员） | `phase2_laboratory_equipment.sql`、`phase5_lab_ownership.sql` |
-| 3 | `tb_equipment_category` | 设备分类 | `phase2_laboratory_equipment.sql` |
-| 4 | `tb_equipment` | 设备（归属实验室 + 分类，`booking_enabled` 控制可否预约） | `phase2_laboratory_equipment.sql` |
-| 5 | `tb_reservation_batch` | 预约批次（开放时段 + 名额 + 状态机 DRAFT/PUBLISHED/CLOSED/CANCELLED） | `phase5_reservation_batch.sql` |
-| 6 | `tb_reservation` | 预约单（RESERVED/CANCELLED/COMPLETED/NO_SHOW，含 `active_flag`） | `phase7_reservation.sql`、`phase9_reservation_lifecycle.sql` |
-| 7 | `tb_reservation_request` | 预约请求状态机（对账输入） | `phase8_consistency.sql` |
-| 8 | `tb_reservation_dlq` | 死信记录（NEW/REPLAYED/DISCARDED） | `phase8_consistency.sql` |
+| 服务 | 版本 / 地址 | 备注 |
+|---|---|---|
+| JDK | **8**（必须） | 例如 `export JAVA_HOME=/path/to/corretto-1.8.0_504/Contents/Home` |
+| Maven | ≥ 3.6 | — |
+| MySQL | `127.0.0.1:3306`，库名 `hmdp` | JDBC 需 `allowPublicKeyRetrieval=true` |
+| Redis | `127.0.0.1:6379`，默认 db0 | 可设密码 |
+| RabbitMQ | `localhost:5672`，vhost `/` | 管理台 `http://localhost:15672` |
+| Node.js | **≥ 20.19**（仅前端需要） | `vite@8.3.3` 的要求，本机 v22.23.1 实测 |
 
-**种子数据**：`tb_laboratory` 4 行、`tb_equipment` 12 行、`tb_equipment_category` 若干；脚本**幂等**，可重复执行不产生主键冲突、不改变行数。
+> 库名沿用 `hmdp`、表前缀沿用 `tb_`，是为避免重构期间改动既有数据与破坏历史脚本可追溯性。
 
-**历史课程表**：`phase10_drop_legacy_tables.sql` 提供 10 张已废弃课程表的幂等 `DROP`（见第 15 节说明）。
+### 2. 配置凭据（真实口令不入库）
 
----
-
-## 11. 启动方式
-
-### 11.1 前置条件
-
-- **JDK 8**（必须；`export JAVA_HOME=/path/to/corretto-1.8.0_504/Contents/Home`）
-- MySQL（本地 3306）、Redis（本地 6379，可设密码）、RabbitMQ（本地 5672，需管理台可另开 15672）
-- Maven ≥ 3.6
-
-### 11.2 配置真实口令（不入库）
-
-`application.yaml` 里所有口令都是 `change_me` 占位，真实值放在 **`application-local.yaml`**（已被 `.gitignore` 忽略）：
+`application.yaml` 中所有口令都是 `change_me` 占位，真实值放在 **`application-local.yaml`**（已被 `.gitignore` 忽略）：
 
 ```bash
 cp src/main/resources/application-local.yaml.example src/main/resources/application-local.yaml
 # 编辑 application-local.yaml，填入本机 MySQL / Redis / RabbitMQ 口令
 ```
 
-`application.yaml` 中 `spring.profiles.active: local`，因此启动时该文件自动生效。
+`application.yaml` 中 `spring.profiles.active: local`，启动时该文件自动生效。
 
-### 11.3 初始化数据库（按顺序执行）
+### 3. 初始化数据库（按顺序执行）
 
 ```bash
 for f in phase0_baseline phase2_laboratory_equipment phase3_user_role \
@@ -277,23 +219,21 @@ done
 mysql -h127.0.0.1 -uroot -p hmdp < src/main/resources/db/phase10_drop_legacy_tables.sql
 ```
 
-### 11.4 授予管理员
+脚本**幂等**，可重复执行。种子数据含 `tb_laboratory` 4 行、`tb_equipment` 12 行及若干设备分类。
 
-系统不提供「注册管理员」的接口，管理员由 SQL 直接指定（与角色拦截器 `@RequireRole(LAB_ADMIN)` 配套）。
+### 4. 授予管理员
 
-**迁移链已经建好两个种子管理员**，并把实验室挂到了各自名下（`phase3_user_role.sql:9`、`phase5_lab_ownership.sql:9,13,17`）：
+系统不提供「注册管理员」的接口，管理员由 SQL 直接指定。**迁移链已内置两个种子管理员**，直接登录即为管理员，无需额外 SQL：
 
 | 手机号 | 昵称 | 负责的实验室 |
 |---|---|---|
 | `13900000001` | 实验室管理员 | 实验室 `1`、`2` |
 | `13900000002` | 实验室管理员B | 实验室 `3`、`4` |
 
-**用它们登录就已经是管理员了，不需要额外执行任何 SQL。** 只有要让**别的**手机号成为管理员时才按下面的写法改——注意 `phone` 必须**已经在 `tb_user` 里有一行**（例如先用它登录一次）：
+若要让**别的**手机号成为管理员，注意 `phone` 必须已存在于 `tb_user`（先登录一次即可）：
 
 ```sql
--- 前提：该手机号已存在于 tb_user；否则这句影响 0 行，不报错，什么也没做
 UPDATE tb_user SET role = 'LAB_ADMIN' WHERE phone = '13900000001';
--- 认领实验室：子查询必须查得到人，否则 admin_user_id 会被写成 NULL，实验室变成无主
 UPDATE tb_laboratory
    SET admin_user_id = (SELECT id FROM tb_user WHERE phone = '13900000001')
  WHERE id = 1;
@@ -303,45 +243,20 @@ SELECT phone, role FROM tb_user WHERE phone = '13900000001';
 SELECT id, admin_user_id FROM tb_laboratory WHERE id = 1;
 ```
 
-> **两个静默失败**（都实测过）：`phone` 不存在时 `UPDATE tb_user` 影响 **0 行**且不报错；紧接着的子查询返回 `NULL`，于是 `UPDATE tb_laboratory` 把 `admin_user_id` **写成 NULL**，该实验室的管理端随即变成空白——现象像"权限没生效"，实际是归属被清掉了。所以每条 UPDATE 之后都要按上面的自查 SQL 看一眼。
+> ⚠️ 这两句 UPDATE 有**静默失败**风险：`phone` 不存在时影响 0 行且不报错，紧随其后的子查询返回 `NULL`，会把 `admin_user_id` 写成 NULL，实验室变成「无主」（现象像权限没生效）。所以务必按上面的自查 SQL 确认。
 
-### 11.5 启动
+### 5. 启动后端
 
 ```bash
 mvn spring-boot:run
 # 或：mvn -DskipTests package && java -jar target/yanyuetong-0.0.1-SNAPSHOT.jar
 ```
 
-应用监听 **8081**。首次启动会自动声明 RabbitMQ 交换机/队列，并注册定时对账任务（可用 `yanyuetong.reservation.reconcile-*` 调整周期与阈值）。
+应用监听 **8081**。首次启动会自动声明 RabbitMQ 交换机/队列，并注册定时对账任务。
 
-### 11.6 跑测试
+### 6. 启动前端
 
-**后端**
-
-```bash
-mvn test
-# 仓库级终验闸门（旧命名零残留 / 语义关键词 / 凭据 / 仓库形态 / 未跟踪面），见第 14 节第 6 条
-bash scripts/verify-acceptance.sh
-```
-
-> 测试会**真实连接**本机 MySQL / Redis / RabbitMQ（不是内存替身），因此前置服务必须可用。测试用的手机号夹具在 `@AfterEach` 中自行清理。
-
-**前端**（先 `cd frontend`）
-
-| 命令 | 需要什么 |
-|---|---|
-| `npm run check:ui` | **完全离线**——纯静态断言，不连任何服务 |
-| `npm run check:request` · `check:batch` | 后端在跑（默认 `http://127.0.0.1:18081`，可用 `VERIFY_BACKEND` 覆盖）；`check:request` 还需 `VERIFY_TOKEN` |
-| `npm run check:browse` | `VERIFY_BACKEND` + `VERIFY_TOKEN` |
-| `npm run check:session` | `VERIFY_BACKEND` + `VERIFY_CODE`（验证码由人从后端日志里搬一次，见 §11.7） |
-| `npm run check:admin` · `check:reservation` | `VERIFY_BACKEND` + token；部分组还需 `VERIFY_*` 指定的库里真实 id |
-| `npm run check:dlq` | `VERIFY_BACKEND` + `VERIFY_ADMIN_TOKEN` + `VERIFY_DLQ_*` 指定的真实死信 id |
-
-**没有环境变量也能跑**：需要真数据的组会打印 `SKIP: … is not set`，而不是假装通过。部分套件另带空转护栏（例如 `check:ui` 断言"确实枚举到 15 个状态加载器"，数量对不上就红），所以"全绿"里不会混进"根本没查到"。
-
-### 11.7 启动前端（Vite 开发服务器）
-
-前端是**独立的 Vue 3 项目**，位于 `frontend/`，需要 **Node ≥ 20.19**（`vite@8.3.3` 的要求；本机实测 v22.23.1）。后端要同时起着（§11.5）。
+前端是**独立的 Vue 3 + Vite 工程**，位于 `frontend/`（后端需同时运行）：
 
 ```bash
 cd frontend
@@ -349,104 +264,62 @@ npm install
 npm run dev            # → http://localhost:5173
 ```
 
-开发服务器把 `/api` 前缀的请求代理到后端，**并会剥掉 `/api` 前缀**——后端自身的路径没有 `/api`（`frontend/vite.config.js:9-13`）：
+开发服务器把 `/api` 前缀的请求代理到后端，**并会剥掉 `/api` 前缀**。默认代理目标是 `http://127.0.0.1:8081`，后端不在 8081 时用环境变量覆盖：
 
-| 变量 | 默认 | 用途 |
-|---|---|---|
-| `VITE_API_PROXY_TARGET` | `http://127.0.0.1:8081` | 代理目标。**后端不在 8081 时必须覆盖**，例如 8081 已被本机别的项目占用：`VITE_API_PROXY_TARGET=http://127.0.0.1:18081 npm run dev` |
+```bash
+VITE_API_PROXY_TARGET=http://127.0.0.1:18081 npm run dev
+```
 
-**登录时的验证码**：后端**不把验证码放进响应体**（只写 Redis 与 debug 日志），所以要么看后端控制台那行「发送短信验证码成功，验证码：……」再手输，要么直接从 Redis 取：
+**关于登录验证码**：后端**不把验证码放进响应体**（只写 Redis 与 debug 日志），本地联调时看后端控制台那行「发送短信验证码成功，验证码：……」，或直接从 Redis 取：
 
 ```bash
 redis-cli -a '<Redis 口令>' GET login:code:13800000000
 ```
 
-> 这是**有意为之**，不是没做完：曾考虑加一个"回传验证码"的开关，但那等于在配置层面开一个认证旁路，一旦误开在任何非本机 profile 就是真漏洞。本机单人演示下，"看一眼控制台"的成本更低。
-
 生产构建：`npm run build`（产物 `frontend/dist/`）。
 
 ---
 
-## 12. 环境依赖
+## 项目结构
 
-| 服务 | 默认地址 | 配置位置 | 备注 |
-|---|---|---|---|
-| MySQL | `127.0.0.1:3306/hmdp` | `application-local.yaml` | JDBC 需 `allowPublicKeyRetrieval=true`（`caching_sha2_password`） |
-| Redis | `127.0.0.1:6379` | `application-local.yaml` | 默认 **db0** |
-| RabbitMQ | `localhost:5672`，vhost `/` | `application-local.yaml` | 管理台 `http://localhost:15672` |
-| Node.js | **≥ 20.19**（本机 v22.23.1 实测） | `frontend/`（`vite@8.3.3` 的要求） | 仅前端需要；`frontend/package.json` 未声明 `engines` |
-
-应用自身的可调项（`application.yaml`）：
-
-```yaml
-yanyuetong:
-  reservation:
-    reconcile-interval-ms: 300000    # 对账任务执行间隔
-    reconcile-threshold-ms: 600000   # 多久没进展算「陈旧」
-    reconcile-limit: 200             # 单轮最多处理多少条
-    dlq-max-replay: 3                # 死信最大重放次数
+```
+yanyuetong/
+├── src/
+│   ├── main/
+│   │   ├── java/com/yanyuetong/
+│   │   │   ├── controller/            # 7 个 RestController（33 个端点）
+│   │   │   ├── service/impl/          # 业务层：读路径 / 预约写路径 / 对账
+│   │   │   ├── mq/                    # RabbitMQ 消费者（正常链路 + 死信链路）
+│   │   │   ├── mapper/                # MyBatis-Plus Mapper 接口
+│   │   │   ├── entity/ dto/ vo/ enums/ exception/
+│   │   │   ├── config/                # MyBatis / MVC / 定时任务 配置
+│   │   │   ├── annotation/            # @RequireRole 角色注解
+│   │   │   └── utils/                 # CacheClient、RedisIdWorker、Lua 执行器、拦截器
+│   │   └── resources/
+│   │       ├── application.yaml               # 主配置（口令为占位符）
+│   │       ├── application-local.yaml.example # 本地凭据模板
+│   │       ├── db/                            # 迁移链 phase0 … phase10
+│   │       ├── mapper/                        # Mapper XML
+│   │       └── reservation.lua 等             # Redis Lua 脚本
+│   └── test/java/com/yanyuetong/              # 16 个测试类
+├── frontend/                          # 独立 Vue 3 + Vite 应用
+│   ├── src/{api,assets,components,constants,layouts,router,stores,utils,views}/
+│   └── scripts/verify-*.mjs           # 9 个前端验收脚本
+├── scripts/
+│   ├── verify-acceptance.sh           # 仓库级终验闸门
+│   └── demo-readiness.sh              # 演示前基线体检
+├── docs/                              # 需求 / 重构 / 前端 / 学习 / 历史文档
+└── pom.xml
 ```
 
 ---
 
-## 13. API 示例
+## 接口概览
 
 所有响应统一为 `Result`：`{ "success": true, "data": ..., "errorMsg": null, "total": null }`（`null` 字段默认不序列化）。
 登录后需在请求头带 `authorization: <token>`。
 
-**登录**
-
-```bash
-curl -X POST 'http://localhost:8081/user/code?phone=13800000000'
-# 验证码不回传响应体：它以 login:code:{phone} 写入 Redis（TTL 2 分钟）并打 debug 日志，
-# 本地联调从应用日志里取，或直接 redis-cli GET login:code:13800000000
-curl -X POST http://localhost:8081/user/login \
-     -H 'Content-Type: application/json' \
-     -d '{"phone":"13800000000","code":"<上一步拿到的 6 位验证码>"}'
-# → { "success": true, "data": "<token>" }
-curl http://localhost:8081/user/me -H "authorization: $TOKEN"
-```
-
-**浏览（读路径，走缓存）**
-
-```bash
-# 除「登录」里的 /user/code 与 /user/login 两个端点外，其余端点一律需要登录
-curl 'http://localhost:8081/laboratory/list?current=1' -H "authorization: $TOKEN"
-curl http://localhost:8081/equipment/1 -H "authorization: $TOKEN"
-curl 'http://localhost:8081/equipment/page?current=1&laboratoryId=1' -H "authorization: $TOKEN"
-curl 'http://localhost:8081/equipment-category/list' -H "authorization: $TOKEN"
-# 不带上面这行 header 时，这四个端点实测均为 401 且响应体为空（见下方「错误语义」）
-```
-
-**预约（写路径，Lua + MQ）**
-
-```bash
-# 提交预约（batchId 由管理员创建的批次给出）
-curl -X POST http://localhost:8081/reservation \
-     -H "authorization: $TOKEN" -H 'Content-Type: application/json' \
-     -d '{"batchId":1}'
-# → { "success": true, "data": <reservationId> }
-
-curl 'http://localhost:8081/reservation/page?current=1' -H "authorization: $TOKEN"
-curl -X POST http://localhost:8081/reservation/1/cancel -H "authorization: $TOKEN"
-```
-
-**管理端（需 `LAB_ADMIN`）**
-
-```bash
-curl -X POST http://localhost:8081/reservation-batch \
-     -H "authorization: $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-     -d '{"equipmentId":1,"totalQuota":50,"bookingStartTime":"2026-10-07 08:00:00","bookingEndTime":"2026-10-07 18:00:00"}'
-curl -X POST http://localhost:8081/reservation-batch/1/publish -H "authorization: $ADMIN_TOKEN"
-curl 'http://localhost:8081/reservation/manage/page?current=1' -H "authorization: $ADMIN_TOKEN"
-curl -X POST http://localhost:8081/reservation/1/verify -H "authorization: $ADMIN_TOKEN"
-curl 'http://localhost:8081/reservation-dlq/page?current=1' -H "authorization: $ADMIN_TOKEN"
-curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $ADMIN_TOKEN"
-```
-
-**接口总览**
-
-共 **33** 个端点，逐条与 `controller/` 源码核对。`⚙` = 除登录外还要求 `LAB_ADMIN` 角色（共 18 个）；不带 `⚙` 的只需登录，任意角色即可；仅 `/user/code` 与 `/user/login` 是公开端点。
+共 **33** 个端点。`⚙` = 除登录外还要求 `LAB_ADMIN` 角色（共 18 个）；不带 `⚙` 的只需登录，任意角色即可；仅 `/user/code` 与 `/user/login` 是公开端点。
 
 | 模块 | 端点 |
 |---|---|
@@ -458,70 +331,141 @@ curl -X POST http://localhost:8081/reservation-dlq/1/replay -H "authorization: $
 | 预约 | `POST /reservation`、`GET /reservation/page`、`GET /reservation/{id}`、`GET /reservation/manage/page` ⚙、`POST /reservation/{id}/cancel`、`POST /reservation/{id}/verify` ⚙ |
 | 死信 | `GET /reservation-dlq/page` ⚙、`GET /reservation-dlq/{id}` ⚙、`POST /reservation-dlq/{id}/replay` ⚙ |
 
-**错误语义**（实测；「空体」指响应体 0 字节）
+各端点的 curl 示例、完整的错误语义（401/403/400/404/500 各自的响应形态）与「资源不存在」的多种表现，见 [附录 §4](docs/APPENDIX-实现细节与已知边界.md)。
 
-| 情形 | HTTP | 响应体 |
+---
+
+## 配置说明
+
+**`application.yaml`（主配置）**
+
+```yaml
+yanyuetong:
+  reservation:
+    reconcile-interval-ms: 300000    # 对账任务执行间隔
+    reconcile-threshold-ms: 600000   # 多久没进展算「陈旧」
+    reconcile-limit: 200             # 单轮最多处理多少条
+    dlq-max-replay: 3                # 死信最大重放次数
+```
+
+**前端环境变量**
+
+| 变量 | 默认 | 用途 |
 |---|---|---|
-| 无 token / token 失效 | `401` | **空体** —— `LoginInterceptor` 只 `setStatus(401)`，不写 body |
-| 已登录但角色不符（USER 打 `⚙` 端点） | `403` | **空体** —— `RoleInterceptor` 只 `setStatus(403)`，不写 body |
-| 角色正确但**无归属权限**（操作他室设备、他人预约） | `403` | `Result.fail("<中文原因>")`，如 `无权管理该实验室`、`无权核验该预约` |
-| 业务校验失败（非草稿批次被改、时段重叠、设备状态值非法…） | `400` | `Result.fail("<中文原因>")` |
-| 路径段不是数字（如 `/laboratory/abc`） | `500` | `Result.fail("服务器异常")` |
-| 路径未映射 | `404` | Spring 默认错误体（**不是** `Result` 形状） |
+| `VITE_API_PROXY_TARGET` | `http://127.0.0.1:8081` | Vite 开发服务器代理目标（**后端不在 8081 时必须覆盖**） |
 
-**「资源不存在」在详情端点上有两种形态**，前端两种都要处理（实测）：
+**Redis Key 设计**
 
-| 端点 | 资源不存在时 |
+| Key | 类型 | TTL | 用途 |
+|---|---|---|---|
+| `login:code:{phone}` | String | 2 min | 登录验证码 |
+| `login:token:{token}` | Hash | **30 min（滑动）** | 登录会话，每次请求续期 |
+| `lab:equipment:{id}` | String(JSON) | 30 min ± 5 min 抖动 | 设备详情缓存 |
+| `lab:equipment:null:{id}` | String | 2 min | 空值缓存，防穿透 |
+| `lock:cache:{id}` | String | 短 | 缓存重建互斥锁（防击穿） |
+| `lock:reservation:reconcile` | String | 短 | 对账任务互斥（多实例只有一个跑） |
+| `reservation:batch:quota:{batchId}` | String | 批次截止 + 24h | **预约名额计数器** |
+| `reservation:batch:users:{batchId}` | Set | 同上 | **已预约用户去重集合** |
+| `icr:reservation:yyyy:MM:dd` | String | 按日 | `RedisIdWorker` 的按日自增序号 |
+
+**RabbitMQ 拓扑**
+
+| 项 | 配置 |
 |---|---|
-| `GET /equipment/{id}` | `Result.fail("设备不存在")` —— 业务失败形态 |
-| `GET /reservation-batch/{id}` | `Result.fail("预约批次不存在")` |
-| `GET /reservation-dlq/{id}` | `Result.fail("死信记录不存在")` |
-| `GET /laboratory/{id}` | **`200` + `{"success":true}`**，`data` 字段被省略（即 `Result.ok(null)`）—— 与上三者不同形 |
-| `GET /reservation/{id}` | `403` + `Result.fail("无权查看该预约")` —— 他人记录与不存在**同形**，不区分，避免泄露存在性 |
+| Exchange | `reservation.exchange`（Direct，durable） |
+| 队列 | `reservation.create.queue`（durable，绑定 `reservation.create`） |
+| 死信 | `reservation.create.dlq.queue`，绑定 `x-dead-letter-routing-key = reservation.create.dlq` |
+| 发布确认 | `publisher-confirm-type: correlated` + `publisher-returns: true` |
+| 消费 ack | `acknowledge-mode: manual`，`prefetch: 1` |
+| 自动重试 | `listener.simple.retry.enabled: false`（**有意关闭**，理由见[附录 §3](docs/APPENDIX-实现细节与已知边界.md)） |
+
+**数据库**（8 张表，`tb_` 前缀保留）
+
+| # | 表 | 说明 | 建表脚本 |
+|---|---|---|---|
+| 1 | `tb_user` | 用户（`role`: `USER` / `LAB_ADMIN`） | `phase0_baseline.sql` |
+| 2 | `tb_laboratory` | 实验室（`admin_user_id` 指向负责管理员） | `phase2_*`、`phase5_lab_ownership.sql` |
+| 3 | `tb_equipment_category` | 设备分类 | `phase2_laboratory_equipment.sql` |
+| 4 | `tb_equipment` | 设备（归属实验室 + 分类） | `phase2_laboratory_equipment.sql` |
+| 5 | `tb_reservation_batch` | 预约批次（开放时段 + 名额 + 状态机） | `phase5_reservation_batch.sql` |
+| 6 | `tb_reservation` | 预约单（含 `active_flag`） | `phase7_reservation.sql`、`phase9_*.sql` |
+| 7 | `tb_reservation_request` | 预约请求状态机（对账输入） | `phase8_consistency.sql` |
+| 8 | `tb_reservation_dlq` | 死信记录（NEW/REPLAYED/DISCARDED） | `phase8_consistency.sql` |
 
 ---
 
-## 14. 项目亮点
+## 测试与验收
 
-1. **Redis 与 DB 的职责被明确切开**：Redis 做高并发准入（Lua 原子），DB 做账实相符，中间用「请求状态机 + 定时对账」缝合，而不是把一致性寄托在某一个组件上。
-2. **三套缓存工具各司其职，没有被"统一"掉**：`CacheClient`（穿透/击穿/雪崩三件套）、`RedisIdWorker`（全局唯一 ID）、Redisson 锁（看门狗续期）解决的是三个不同问题，重构中刻意都保留。
-3. **消息可靠性是被实测过的，不是抄配置**：手动 ack 下默认 recoverer 不真正 nack 这个坑，是通过反编译 Spring AMQP 字节码核对后确定，并据此改为显式 `basicNack` + 容器级 `ConditionalRejectingErrorHandler`。
-4. **每个修复都有"改坏后测试变红"的证据**：关键行为（依赖检查、字段不外泄、异常状态码、对账退避）都用**变体实验**验证过判别力——把修复改回坏状态，确认对应用例确实变红，而不是只看"测试全绿"。
-5. **诚实的测试观**：对**没有判别力证据**的改动（纯常量、纯文案、无法确定性构造的竞态分支）明确登记为"无判别力证据"，不冒充已验证。
-6. **验收清单是可复跑的脚本，不是散落的命令**：`bash scripts/verify-acceptance.sh` 把「旧命名零残留 / 黑马语义关键词 / 凭据 / 仓库形态 / **未跟踪面** / 禁改清单」编码进去，自带三项自证——探测范围里先找到一个已知存在的串，才允许采信它的 0 命中；**未跟踪面那一段另有一次外置的正向前置**（在 `/tmp` 造探针），免得该范围变空后退化成恒绿摆设。**凭据探测器的失败输出只给 `文件:行号`，不回显匹配内容**——报凭据风险只报位置与计数。可选 `SCAN_SECRETS='...'` 写字面量口令（脚本本身入库，所以不内嵌任何口令），`PHASE_BASE=<commit>` 查禁改文件是否被动过。
+**后端**
+
+```bash
+mvn test                        # 16 个测试类（JUnit 5 + MockMvc）
+bash scripts/verify-acceptance.sh   # 仓库级终验闸门
+```
+
+> 测试会**真实连接**本机 MySQL / Redis / RabbitMQ（不是内存替身），因此前置服务必须可用；测试用的手机号夹具在 `@AfterEach` 中自行清理。
+
+`verify-acceptance.sh` 把「旧命名零残留 / 黑马语义关键词 / 凭据泄漏 / 仓库形态 / 未跟踪面 / 禁改清单」编码为可复跑脚本，自带三项自证机制（先验证探测范围本身非空，才采信其 0 命中）。凭据探测器的失败输出只给 `文件:行号`，**不回显匹配内容**。
+
+**前端**（先 `cd frontend`）
+
+| 命令 | 需要什么 |
+|---|---|
+| `npm run check:ui` | **完全离线**——纯静态断言，不连任何服务 |
+| `npm run check:request` · `check:batch` | 后端在跑（默认 `http://127.0.0.1:18081`，可用 `VERIFY_BACKEND` 覆盖）；`check:request` 还需 `VERIFY_TOKEN` |
+| `npm run check:browse` | `VERIFY_BACKEND` + `VERIFY_TOKEN` |
+| `npm run check:session` | `VERIFY_BACKEND` + `VERIFY_CODE` |
+| `npm run check:admin` · `check:reservation` | `VERIFY_BACKEND` + token，部分组还需 `VERIFY_*` 指定的真实 id |
+| `npm run check:dlq` | `VERIFY_BACKEND` + `VERIFY_ADMIN_TOKEN` + `VERIFY_DLQ_*` |
+
+**没有环境变量也能跑**：需要真实数据的检查组会打印 `SKIP: … is not set`，而不是假装通过；部分套件另带空转护栏（数量对不上就变红），所以「全绿」里不会混进「根本没查到」。
 
 ---
 
-## 15. 已知边界
+## 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [docs/APPENDIX-实现细节与已知边界.md](docs/APPENDIX-实现细节与已知边界.md) | 实现细节、接口错误语义、实测记录、已知边界 |
+| [docs/MIGRATION_STATUS.md](docs/MIGRATION_STATUS.md) | 重构迁移总台账 |
+| [docs/study/README.md](docs/study/README.md) | **后端学习手册**（14 篇，从业务模型讲到并发细节，面向面试） |
+| [docs/study/13-项目面试问答.md](docs/study/13-项目面试问答.md) | 面试问答 |
+| [docs/study/14-一分钟与三分钟项目介绍.md](docs/study/14-一分钟与三分钟项目介绍.md) | 项目介绍口述稿 |
+| [docs/frontend/FRONTEND-DESIGN.md](docs/frontend/FRONTEND-DESIGN.md) | 前端设计说明 |
+| [docs/plan/](docs/plan/) | 原始需求与分阶段重构计划 |
+| [docs/refactor/](docs/refactor/) | 各阶段设计稿与评审记录（PHASE0–PHASE10） |
+| [docs/history/](docs/history/) | 历史交付报告 |
+| [docs/benchmark/BENCHMARK-REPORT.md](docs/benchmark/BENCHMARK-REPORT.md) | 压测报告 |
+
+---
+
+## 已知边界
 
 **设计取舍（有意不做）**
 
-- **不使用微服务 / 注册中心 / 分库分表 / ES / Kafka / 分布式事务框架**。当前业务量级下它们是纯负债；单库 + 两个中间件已足够，且可验证。
-- **库名保留 `hmdp`**、**表前缀保留 `tb_`**：改名收益是"观感"，成本是全量 DDL 与 SQL 的机械 churn，并破坏历史脚本可追溯性。
-- **设备名称搜索用 `LIKE '%name%'`**，不走索引。当前设备量级（十几行）下，搜索语义正确优先于索引。
-- **`CacheClient` 保留了两个没有调用方的查询实现**（`queryWithPassThrough` / `queryWithLogicalExpire`）。设备详情只走 `queryWithMutex`；这两个方法分别对应「缓存穿透」与「逻辑过期」两种范式，保留作参照，类注释已注明 `queryWithLogicalExpire` 为「未启用的备选实现」。这是全仓唯一一处有意保留的无调用方生产代码。
-- **缓存删除不做补偿**：`EquipmentServiceImpl.deleteEquipmentCache` 直接调 `stringRedisTemplate.delete`，既无 try/catch 也无重试——Redis 不可用时异常会直接抛出，表现是「库里的写已经生效、接口却报错」，缓存里的旧值要等 30 分钟 TTL 才过期。另外 `queryWithMutex` 抢锁重试 20 次仍失败时会直查数据库且**不回写缓存**，此时该热键的并发会全部压到 DB。两者都登记为已知边界：为它们引入补偿链路，代价大于收益。
+- 不使用微服务 / 注册中心 / 分库分表 / ES / Kafka / 分布式事务框架——当前业务量级下它们是纯负债。
+- 库名保留 `hmdp`、表前缀保留 `tb_`：改名收益是观感，成本是全量 DDL 与 SQL 的机械变更。
+- 设备名称搜索用 `LIKE '%name%'`，不走索引：当前设备量级（十几行）下搜索语义正确优先于索引。
 
-**行为与契约**
+**其他边界**
 
-- **删除实验室是行为变更**：现在会**拒绝**删除「仍挂有设备」的实验室（返回业务错误），而早期版本能删。这是有意的防御性变更。
-- **管理员取权只能靠 SQL**（第 11.4 节）。系统没有管理员注册入口。
-- **`RoleInterceptor` 的「类级注解」分支目前没有使用者**，且 403 响应体为空——属有意保留的扩展点。
+- 删除实验室会**拒绝**删除「仍挂有设备」的实验室，这是有意的防御性变更。
+- 管理员取权只能靠 SQL，系统没有管理员注册入口。
+- 缓存删除不做补偿：`EquipmentServiceImpl.deleteEquipmentCache` 无 try/catch 与重试。
+- 仓库内 `benchmark/` 目录被 `.gitignore` 整目录忽略（其中含真实口令与 token）。
 
-**数据与环境**
+更多实测记录与逐条边界说明（含数据规模、夹具状态、未实测项）见 [附录](docs/APPENDIX-实现细节与已知边界.md)。
 
-- **`tb_user` 里有 1011 行课程时代遗留用户**（外加 2 个 `LAB_ADMIN`）。这些行不会被自动清理；新装库由迁移链建库时不会有它们。终验对用户表的判据是"行数未变"，不是"0 行"。
-- **`phase10_drop_legacy_tables.sql` 是一次性脚本**：仅从课程项目升级的旧库需要执行，且**不可逆**（会删除 `tb_shop` 14 行 / `tb_blog` 4 行 / `tb_voucher` 1 行等课程演示数据）。新装库不需要它。它同时也是全仓库唯一集中写出课程表名的地方，保留它是为了让旧库仍可清理。
-- **Redis 里的键族全部是在用键**（2026-10-07 实测，课程时代残留已清理干净）：`icr:reservation:<年>:<月>:<日>` 按日自增、`reservation:batch:quota:*` 批次剩余名额、`reservation:batch:users:*` 批次去重集合、`lab:equipment:<id>` 设备详情缓存、`login:token:*` 会话。**`icr:order:*` 实测 0 个**（早期 README 提到的 3 个残留计数键已删除）；`icr:reservation:*` 是在用键，不要误删。
-- **RabbitMQ 上只有本项目自己的队列**（2026-10-07 实测）：`reservation.create.queue` 与 `reservation.create.dlq`（各 0 条，durable、非 auto-delete），交换机 `reservation.exchange` / `reservation.dlx`。早期 README 提到的课程死队列 `hello,queue1` / `hello,queue2` **实测不存在**（已清理）。
-- **管理端预约列表是"真实数据规模"下的样子**：压测夹具留在库里，`tb_reservation` 全表 **301350 行**；管理端 `/reservation/manage/page` 按 `l.admin_user_id` **归属过滤**，`13900000001`（名下实验室 1、2）看到 **301344 行**、另一位管理员（实验室 3、4）看到 6 行，每页固定 5 条即约 **60269 页**（后端所有分页端点固定 5 条/页、Query DTO 只有 `current` 没有 `pageSize`，故前端的分页控件不提供"每页条数"选择器——取舍见 `docs/frontend/FRONTEND-DESIGN.md` §11 的 D-6）。这**不是缺陷**：同页内与跨页的 18 位 id 均无重复，排序与分页经 bigint 安全解析复核过（早先"同一行重复 5 次"的现象是原生 `JSON.parse` 精度塌缩造成的假象）。
-- **两条演示链路的边界**（2026-10-07 实测，详见 `docs/frontend/FRONTEND-DESIGN.md` §10 的 F12 记录）：
-  - **死信治理 / 重放无活数据**：`tb_reservation_dlq` 为 **0 行**，F10 的夹具已消耗，该链路只能靠 F10 的实测记录佐证。
-  - **核验的成功路径当天演不出来**，这是设计使然而非缺陷：publish 强制 `booking_end_time ≤ start_time`、booking 要求 `now < booking_end_time`，故新预约必然 `start_time > now`；而核验闸门要求 `now >= batch.start_time`。演示时展示的是**闸门本身**（管理员 `400 预约尚未开始，无法核验` / 学生 `403` 空体 / 无 token `401` 空体）。若确实要演成功路径，需把某批次的时段手工改到过去——`scripts/demo-readiness.sh` 的头部注释给了这条 SQL 与其逆操作，**本仓库不会自动执行**它。
-- **560px 以下的适配未实测**：响应式手机档定在 560px（`docs/frontend/FRONTEND-DESIGN.md` §8），而真机扫描的下限是 600px（20 条路由 × 5 档宽度，100 段全绿）。
-- **`scripts/demo-readiness.sh` 是「基线态」检查，不是「健康」检查**：它把当前环境与**已记录的基线**逐项比对（`tb_reservation` 301350、`tb_reservation_batch` 23 等），因此**任何改数据的操作都会让它报 `[FAIL]`——包括演示本身**（下一次预约、发布一个批次、取消、核验）。正确用法是**先跑体检、后演示**；演示之后那几项 `[FAIL]` 的含义是"环境已偏离基线"，**不是环境损坏**（完整说明见脚本头部的「适用范围」段）。
+---
 
-**安全**
+## 安全提示
 
-- **git 历史含明文口令**（源自原始课程提交），**未改写**。工作区已全部脱敏：文档中的口令字面量已替换为等义描述，真实口令只存在于被 `.gitignore` 忽略的 `application-local.yaml`。**若要公开此仓库，必须先改写历史或轮换口令。**
-- **RabbitMQ 的 `guest/guest` 未脱敏**：它是 RabbitMQ 官方文档公开的出厂默认值，且在本机实测**不可用**（管理 API 返回 401），不构成有效凭据，因此按"公开默认值"处理。
+> **本仓库的 git 历史中含明文口令**（源自原始课程提交），**历史未改写**。当前工作区已全部脱敏：文档中的口令字面量已替换为等义描述，真实口令只存在于被 `.gitignore` 忽略的 `application-local.yaml`。
+>
+> **若要将本仓库转为公开，必须先改写历史或轮换全部口令。**
+
+---
+
+## 许可证
+
+本仓库暂未声明开源许可证。如需公开，建议在改写 git 历史并轮换口令后补充 `LICENSE`。
