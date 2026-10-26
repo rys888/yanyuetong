@@ -81,14 +81,22 @@ if [ "$SELF_B" -ge 1 ]; then
 else
   # docs/ 移出版本库后，入库清单里已没有 CJK 文件名（原先那批全部在 docs/）。
   # 此时范围内这条断言是空的 —— 既不能算通过（空断言等于没验），也不能直接放过，
-  # 否则 quotepath 到底有没有关掉就再没人证明了。改为在**范围外**做正向前置：
-  # 盘上 docs/ 仍有 23 个 CJK 路径，看同一个 -c core.quotepath=false 能否原样列出它们。
-  # 对照实测：不加该参数时这些路径会被转成八进制转义，非 ASCII 计数直接变 0。
-  SELF_B_PROBE=$(git -c core.quotepath=false ls-files -o -i --exclude-standard -- docs 2>/dev/null | LC_ALL=C grep -c '[^ -~]')
-  if [ "${SELF_B_PROBE:-0}" -ge 1 ]; then
-    info "自证 B：入库清单已无 CJK 路径（docs/ 已移出版本库）；范围外正向前置通过 —— quotepath 关闭后原样列出 ${SELF_B_PROBE} 个 CJK 路径"
+  # 否则 quotepath 到底有没有关掉就再没人证明了。
+  # 探针必须**自足**：早先版本拿盘上 docs/ 当探针，结果在全新 clone 里 docs/ 不存在，
+  # 闸门对任何克隆者恒红（实测过）。改为自建临时 git 仓库，造一个 CJK 文件名，
+  # 分别用 / 不用 core.quotepath=false 各列一次，看该参数是否真的有判别力。
+  B_PROBE=$(mktemp -d "${TMPDIR:-/tmp}/yy-quotepath-XXXXXX" 2>/dev/null) || B_PROBE=
+  ON=0; OFF=0
+  if [ -n "$B_PROBE" ]; then
+    ( cd "$B_PROBE" && git init -q . && : > '探针-中文.md' && git add -A ) >/dev/null 2>&1
+    ON=$( cd "$B_PROBE" && git -c core.quotepath=false ls-files | LC_ALL=C grep -c '[^ -~]' ); ON=${ON:-0}
+    OFF=$( cd "$B_PROBE" && git ls-files | LC_ALL=C grep -c '[^ -~]' ); OFF=${OFF:-0}
+    rm -rf "$B_PROBE"
+  fi
+  if [ "$ON" -ge 1 ] && [ "$OFF" -eq 0 ]; then
+    info "自证 B：入库清单已无 CJK 路径（docs/ 已移出版本库）；自建探针通过 —— quotepath 关闭时列出 $ON 个 CJK 路径，默认开启时为 $OFF 个"
   else
-    bad "自证 B：入库清单与范围外探针均无 CJK 路径，无法证明 core.quotepath=false 生效"
+    bad "自证 B：quotepath 探针未通过（关闭=${ON} 默认=${OFF}），无法证明 core.quotepath=false 生效"
   fi
 fi
 SELF_C=$(printf '%s\n' "$CODE_FILES" | tr '\n' '\0' | xargs -0 grep -l 'zzz-no-such-string-zzz' | count)
