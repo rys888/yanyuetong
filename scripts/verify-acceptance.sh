@@ -208,14 +208,18 @@ if [ "$ROOT_FILES" = ".gitignore README.md pom.xml " ]; then
 else
   bad "根目录入库文件不是预期的三个：$ROOT_FILES"
 fi
+# 节数钉住值（2026-10 调整 15 → 14）：原先的「本地文档」一节索引的是 docs/，
+# 那批文档已移出版本库、也已被清除出历史；README 再挂着它只会指向不存在的文件。
+# 这不是为了变绿而放宽 —— 这个钉住值的作用是「README 结构一变就红、逼人确认」，
+# 本次属于确认过的结构变更，故同步期望值，同时保留一变化就红的语义。
 SEC=$(grep -c '^## ' README.md)
-if [ "$SEC" = "15" ]; then
+if [ "$SEC" = "14" ]; then
   ok "README.md 有 $SEC 节"
 else
-  bad "README.md 有 $SEC 节（期望 15）"
+  bad "README.md 有 $SEC 节（期望 14）"
 fi
 N_DOCS=$(find docs -type f -name '*.md' | count)
-ok "docs/ 下 $N_DOCS 份 markdown"
+ok "本地 docs/ 下 $N_DOCS 份 markdown（不入库，仅供参考）"
 
 # ── F. 禁改清单（需要 PHASE_BASE）───────────────────────────────────────
 hdr 'F 禁改清单（相对某个 base commit）'

@@ -29,7 +29,6 @@
 - [接口概览](#接口概览)
 - [配置说明](#配置说明)
 - [测试与验收](#测试与验收)
-- [本地文档](#本地文档)
 - [已知边界](#已知边界)
 - [安全提示](#安全提示)
 - [许可证](#许可证)
@@ -421,21 +420,6 @@ bash scripts/verify-acceptance.sh   # 仓库级终验闸门
 
 ---
 
-## 本地文档
-
-本仓库**只托管可运行代码**。需求说明、分阶段重构记录、前端设计、压测报告与后端源码精读手册等文档**仅保留在本地开发环境**，未纳入版本库（`docs/` 已在 `.gitignore` 中忽略，并从 git 历史中清除）。
-
-| 本地路径 | 内容 |
-|---|---|
-| `docs/APPENDIX-实现细节与已知边界.md` | 实现细节、接口错误语义、实测记录、已知边界 |
-| `docs/MIGRATION_STATUS.md` | 重构迁移总台账 |
-| `docs/study/source-walkthrough/` | 后端源码精读手册（14 篇，按真实调用链走：业务场景 → 调用链 → 源码定位 → 设计原因 → 面试重点） |
-| `docs/frontend/FRONTEND-DESIGN.md` | 前端设计说明 |
-| `docs/plan/` · `docs/refactor/` | 原始需求、PHASE0–PHASE10 设计稿与评审记录 |
-| `docs/history/` · `docs/benchmark/` | 历史交付报告、压测报告 |
-
----
-
 ## 已知边界
 
 **设计取舍（有意不做）**
@@ -450,8 +434,6 @@ bash scripts/verify-acceptance.sh   # 仓库级终验闸门
 - 管理员取权只能靠 SQL，系统没有管理员注册入口。
 - 缓存删除不做补偿：`EquipmentServiceImpl.deleteEquipmentCache` 无 try/catch 与重试。
 - 仓库内 `benchmark/` 目录被 `.gitignore` 整目录忽略（其中含真实口令与 token）。
-
-更多实测记录与逐条边界说明（含数据规模、夹具状态、未实测项）保留在本地文档中。
 
 ---
 
