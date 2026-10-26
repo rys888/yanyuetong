@@ -21,8 +21,8 @@
 # 但按它写的范围（`find src pom.xml`）在当前树上实测并非 0：SQL 的 `LIKE` 语法 1 处、
 # DROP 脚本里 9 处中文表名注释。这两处在记录基线时**就已经存在**，所以那句"全部 0 命中"
 # 是范围没写清造成的假结论。本脚本把白名单连同**期望条数**一起钉住 —— 期望条数一旦变化就会红。
-# 上述是 §3.13 第 3 条的两处关键词白名单；D 段另有凭据白名单：出厂默认 guest 2 行，
-# 以及大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）1 行，不要混读。G 段范围是
+# 上述是 §3.13 第 3 条的两处关键词白名单；D 段另有凭据白名单（原为 guest 2 行 +
+# 大写日志词 1 行；docs/ 移出版本库后均为 0，原因见 D 段内联注释），不要混读。G 段范围是
 # `git -c core.quotepath=false ls-files --others --exclude-standard` 列出的“未跟踪且未被忽略”文件。
 
 set -u
@@ -79,7 +79,17 @@ SELF_B=$(printf '%s\n' "$TRACKED" | LC_ALL=C grep -c '[^ -~]')
 if [ "$SELF_B" -ge 1 ]; then
   ok "自证 B：清单含 $SELF_B 个非 ASCII 路径（正是裸 git ls-files 默认会转义的那批）"
 else
-  bad "自证 B：清单里没有非 ASCII 路径，说明 quotepath 没关掉或清单退化了"
+  # docs/ 移出版本库后，入库清单里已没有 CJK 文件名（原先那批全部在 docs/）。
+  # 此时范围内这条断言是空的 —— 既不能算通过（空断言等于没验），也不能直接放过，
+  # 否则 quotepath 到底有没有关掉就再没人证明了。改为在**范围外**做正向前置：
+  # 盘上 docs/ 仍有 23 个 CJK 路径，看同一个 -c core.quotepath=false 能否原样列出它们。
+  # 对照实测：不加该参数时这些路径会被转成八进制转义，非 ASCII 计数直接变 0。
+  SELF_B_PROBE=$(git -c core.quotepath=false ls-files -o -i --exclude-standard -- docs 2>/dev/null | LC_ALL=C grep -c '[^ -~]')
+  if [ "${SELF_B_PROBE:-0}" -ge 1 ]; then
+    info "自证 B：入库清单已无 CJK 路径（docs/ 已移出版本库）；范围外正向前置通过 —— quotepath 关闭后原样列出 ${SELF_B_PROBE} 个 CJK 路径"
+  else
+    bad "自证 B：入库清单与范围外探针均无 CJK 路径，无法证明 core.quotepath=false 生效"
+  fi
 fi
 SELF_C=$(printf '%s\n' "$CODE_FILES" | tr '\n' '\0' | xargs -0 grep -l 'zzz-no-such-string-zzz' | count)
 if [ "$SELF_C" -eq 0 ]; then
@@ -160,10 +170,14 @@ fi
 if [ -n "$D2_LOG" ]; then
   printf '%s\n' "$D2_LOG" | sed -nE 's/^([^:]+:[0-9]+):.*/        日志词 \1/p'
 fi
-if [ "$N_D2_GUEST" = "2" ] && [ "$N_D2_LOG" = "1" ]; then
-  ok "结构性探测器白名单条数：RabbitMQ 出厂默认 guest 2 行；大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）1 行"
+# 白名单期望条数（2026-10 调整）：docs/ 已移出版本库，原先被钉住的三行
+# （docs/history 的 2 行 guest、docs/frontend 的 1 行日志词）随之离开扫描范围，
+# 期望值因此由 2/1 变为 0/0。这不是把判据调松 —— 下面 D2_NONWHITE 那条
+# 「非白名单命中 0」照旧生效，它才是真正的判据；这里只钉住「白名单还剩几条」这一事实。
+if [ "$N_D2_GUEST" = "0" ] && [ "$N_D2_LOG" = "0" ]; then
+  ok "结构性探测器白名单条数：guest ${N_D2_GUEST} 行、大写日志词 ${N_D2_LOG} 行（docs/ 移出版本库后期望 0/0）"
 else
-  bad "白名单条数变化：RabbitMQ 出厂默认 guest ${N_D2_GUEST} 行（期望 2）；大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）${N_D2_LOG} 行（期望 1）"
+  bad "白名单条数变化：RabbitMQ 出厂默认 guest ${N_D2_GUEST} 行（期望 0）；大写日志词（PASS/FAIL/SKIP/OK 后紧跟冒号）${N_D2_LOG} 行（期望 0）"
 fi
 D2_NONWHITE=$(printf '%s\n' "$D2" | grep -v 'guest' | grep -vE '(PASS|FAIL|SKIP|OK):')
 if [ -z "$D2_NONWHITE" ]; then

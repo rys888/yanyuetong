@@ -29,7 +29,7 @@
 - [接口概览](#接口概览)
 - [配置说明](#配置说明)
 - [测试与验收](#测试与验收)
-- [文档索引](#文档索引)
+- [本地文档](#本地文档)
 - [已知边界](#已知边界)
 - [安全提示](#安全提示)
 - [许可证](#许可证)
@@ -48,7 +48,7 @@
 
 技术选型刻意克制：**单体应用 + Maven + 单库**，只依赖 Redis / RabbitMQ 两个中间件，不引入微服务、注册中心、分库分表、搜索引擎。
 
-> **项目来源**：本仓库由课程项目 **黑马点评（hm-dianping）** 重构而来——复用其基础设施（缓存、分布式锁、Lua 脚本、MQ、会话），**整体替换业务域**。原课程业务实体已全部删除。完整的「删了什么 / 换成了什么」对照表见 [附录 §1](docs/APPENDIX-实现细节与已知边界.md)。
+> **项目来源**：本仓库由课程项目 **黑马点评（hm-dianping）** 重构而来——复用其基础设施（缓存、分布式锁、Lua 脚本、MQ、会话），**整体替换业务域**。原课程业务实体已全部删除。
 
 ---
 
@@ -308,7 +308,6 @@ yanyuetong/
 ├── scripts/
 │   ├── verify-acceptance.sh           # 仓库级终验闸门
 │   └── demo-readiness.sh              # 演示前基线体检
-├── docs/                              # 需求 / 重构 / 前端 / 学习 / 历史文档
 └── pom.xml
 ```
 
@@ -331,7 +330,7 @@ yanyuetong/
 | 预约 | `POST /reservation`、`GET /reservation/page`、`GET /reservation/{id}`、`GET /reservation/manage/page` ⚙、`POST /reservation/{id}/cancel`、`POST /reservation/{id}/verify` ⚙ |
 | 死信 | `GET /reservation-dlq/page` ⚙、`GET /reservation-dlq/{id}` ⚙、`POST /reservation-dlq/{id}/replay` ⚙ |
 
-各端点的 curl 示例、完整的错误语义（401/403/400/404/500 各自的响应形态）与「资源不存在」的多种表现，见 [附录 §4](docs/APPENDIX-实现细节与已知边界.md)。
+鉴权失败统一返回**空体**：无 token / token 失效 → `401`；已登录但角色不符 → `403`。业务校验失败 → `400` + `Result.fail("<中文原因>")`；无归属权限 → `403` + `Result.fail("<中文原因>")`。
 
 ---
 
@@ -377,7 +376,7 @@ yanyuetong:
 | 死信 | `reservation.create.dlq.queue`，绑定 `x-dead-letter-routing-key = reservation.create.dlq` |
 | 发布确认 | `publisher-confirm-type: correlated` + `publisher-returns: true` |
 | 消费 ack | `acknowledge-mode: manual`，`prefetch: 1` |
-| 自动重试 | `listener.simple.retry.enabled: false`（**有意关闭**，理由见[附录 §3](docs/APPENDIX-实现细节与已知边界.md)） |
+| 自动重试 | `listener.simple.retry.enabled: false`——**有意关闭**：手动 ack 下默认 `RejectAndDontRequeueRecoverer` 不会真正 nack 进死信，反而会卡死消费者，故改为监听器显式 `basicNack(requeue=false)` + 容器级 `ConditionalRejectingErrorHandler` |
 
 **数据库**（8 张表，`tb_` 前缀保留）
 
@@ -422,18 +421,18 @@ bash scripts/verify-acceptance.sh   # 仓库级终验闸门
 
 ---
 
-## 文档索引
+## 本地文档
 
-| 文档 | 内容 |
+本仓库**只托管可运行代码**。需求说明、分阶段重构记录、前端设计、压测报告与后端源码精读手册等文档**仅保留在本地开发环境**，未纳入版本库（`docs/` 已在 `.gitignore` 中忽略）。
+
+| 本地路径 | 内容 |
 |---|---|
-| [docs/APPENDIX-实现细节与已知边界.md](docs/APPENDIX-实现细节与已知边界.md) | 实现细节、接口错误语义、实测记录、已知边界 |
-| [docs/MIGRATION_STATUS.md](docs/MIGRATION_STATUS.md) | 重构迁移总台账 |
-| [docs/study/source-walkthrough/README.md](docs/study/source-walkthrough/README.md) | **后端源码精读手册**（14 篇，按真实调用链走：业务场景 → 调用链 → 源码定位 → 设计原因 → 面试重点） |
-| [docs/frontend/FRONTEND-DESIGN.md](docs/frontend/FRONTEND-DESIGN.md) | 前端设计说明 |
-| [docs/plan/](docs/plan/) | 原始需求与分阶段重构计划 |
-| [docs/refactor/](docs/refactor/) | 各阶段设计稿与评审记录（PHASE0–PHASE10） |
-| [docs/history/](docs/history/) | 历史交付报告 |
-| [docs/benchmark/BENCHMARK-REPORT.md](docs/benchmark/BENCHMARK-REPORT.md) | 压测报告 |
+| `docs/APPENDIX-实现细节与已知边界.md` | 实现细节、接口错误语义、实测记录、已知边界 |
+| `docs/MIGRATION_STATUS.md` | 重构迁移总台账 |
+| `docs/study/source-walkthrough/` | 后端源码精读手册（14 篇，按真实调用链走：业务场景 → 调用链 → 源码定位 → 设计原因 → 面试重点） |
+| `docs/frontend/FRONTEND-DESIGN.md` | 前端设计说明 |
+| `docs/plan/` · `docs/refactor/` | 原始需求、PHASE0–PHASE10 设计稿与评审记录 |
+| `docs/history/` · `docs/benchmark/` | 历史交付报告、压测报告 |
 
 ---
 
@@ -452,7 +451,7 @@ bash scripts/verify-acceptance.sh   # 仓库级终验闸门
 - 缓存删除不做补偿：`EquipmentServiceImpl.deleteEquipmentCache` 无 try/catch 与重试。
 - 仓库内 `benchmark/` 目录被 `.gitignore` 整目录忽略（其中含真实口令与 token）。
 
-更多实测记录与逐条边界说明（含数据规模、夹具状态、未实测项）见 [附录](docs/APPENDIX-实现细节与已知边界.md)。
+更多实测记录与逐条边界说明（含数据规模、夹具状态、未实测项）保留在本地文档中。
 
 ---
 
