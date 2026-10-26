@@ -4,6 +4,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * MySQL 预约事实的履约状态，与 ReservationRequestStatus 的跨组件处理进度分开。
+ * RESERVED 可转 CANCELLED、COMPLETED 或 NO_SHOW；请求 CONFIRMED 并不表示用户已到场核验。
+ */
 public enum ReservationStatus {
     RESERVED,
     CANCELLED,

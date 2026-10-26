@@ -11,6 +11,11 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.annotation.ResponseStatus;
 
+/**
+ * 把业务异常转换为 HTTP 状态和统一 Result：参数错误 400、归属拒绝 403、暂时不可用 503。
+ * 预约投递结果未知也会返回 503，不能仅凭 HTTP 失败断言未落库，仍需结合请求 ID 查询或等待对账。
+ * 未预期的运行时异常记录详细日志，但只向客户端返回通用 500 信息。
+ */
 @Slf4j
 @RestControllerAdvice
 public class WebExceptionAdvice {

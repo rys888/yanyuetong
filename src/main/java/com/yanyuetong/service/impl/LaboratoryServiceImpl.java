@@ -15,6 +15,9 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 
+/**
+ * 实验室管理及资源归属校验，供设备、批次、预约核验等用例复用管理员范围检查。
+ */
 @Service
 public class LaboratoryServiceImpl extends ServiceImpl<LaboratoryMapper, Laboratory> implements ILaboratoryService {
 
@@ -23,10 +26,12 @@ public class LaboratoryServiceImpl extends ServiceImpl<LaboratoryMapper, Laborat
 
     @Override
     public void assertManageable(Long laboratoryId) {
+        // 1、取得拦截器恢复的当前用户。角色校验与归属校验分开：有管理员角色不等于拥有所有实验室。
         UserDTO user = UserHolder.getUser();
         if (user == null) {
             throw new ForbiddenException("无权管理该实验室");
         }
+        // 2、按实验室负责人 ID 判断管理范围；资源缺失与不属于本人统一拒绝，避免泄露资源存在性。
         Laboratory laboratory = getById(laboratoryId);
         if (laboratory == null || !user.getId().equals(laboratory.getAdminUserId())) {
             throw new ForbiddenException("无权管理该实验室");

@@ -35,6 +35,10 @@ import java.util.stream.Collectors;
 import static com.yanyuetong.config.RabbitMQConfig.RESERVATION_CREATE_ROUTING_KEY;
 import static com.yanyuetong.config.RabbitMQConfig.RESERVATION_EXCHANGE;
 
+/**
+ * 预约死信治理服务，负责保存原始失败证据、查询台账以及经校验后人工重放。
+ * 重放不盲目投递：已落库、已补偿或不可解析的记录会转为 DISCARDED，避免破坏名额一致性。
+ */
 @Slf4j
 @Service
 public class ReservationDlqServiceImpl implements IReservationDlqService {
@@ -84,23 +88,34 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
         }
     }
 
+    /**
+     * 将死信原始字节持久化为 NEW 台账。先解析完整原文再按列上限截断保存，
+     * 避免大消息因截断后 JSON 损坏而被误判为不可解析。
+     *
+     * @param body 死信原始消息体
+     * @param xDeathReason broker 记录的死信原因
+     * @return 新建的死信台账
+     */
     @Override
     public ReservationDlq recordDeadLetter(byte[] body, String xDeathReason) {
+        // 1、保留完整原文用于识别请求 ID；死信可能是非法 JSON，解析失败也继续落账。
         byte[] safeBody = body == null ? new byte[0] : body;
         String originalPayload = new String(safeBody, StandardCharsets.UTF_8);
 
-        // 必须先解析完整原始字节；若先按列上限截断，合法的大 JSON 会被切断并误判为不可解析。
+        // 2、先解析完整内容，再按数据库列容量截断待保存字节，避免在识别请求 ID 前就破坏 JSON。
         Long reservationId = extractReservationId(originalPayload);
 
         int payloadLength = Math.min(safeBody.length, MAX_PAYLOAD_BYTES);
         String storedPayload = new String(
                 safeBody, 0, payloadLength, StandardCharsets.UTF_8);
 
+        // 3、关联请求账本寻找业务失败原因；无法获取时退回解析状态或 broker 元数据，限制原因长度。
         String failureReason = resolveFailureReason(reservationId, xDeathReason);
         if (failureReason != null && failureReason.length() > MAX_FAILURE_REASON_LENGTH) {
             failureReason = failureReason.substring(0, MAX_FAILURE_REASON_LENGTH);
         }
 
+        // 4、以 NEW 状态保存，等待管理员查看或重放。本步骤只记录证据，不负责归还 Redis 名额。
         ReservationDlq deadLetter = new ReservationDlq()
                 .setReservationId(reservationId)
                 .setPayload(storedPayload)
@@ -154,11 +169,18 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
         return toVO(reservationDlqMapper.selectById(id));
     }
 
+    /**
+     * 重放一条 NEW 死信。发送前检查 payload、预约事实和补偿状态，
+     * 只在 broker 确认且未 return 后才以状态+次数 CAS 把台账改为 REPLAYED。
+     *
+     * @param id 死信台账 ID
+     * @return 是否成功重放、拒绝原因与最新台账快照
+     */
     @Override
     public ReservationDlqReplayVO replay(Long id) {
         ReservationDlq deadLetter = id == null ? null : reservationDlqMapper.selectById(id);
 
-        // 1. 只有尚未处理的台账记录可以重放。
+        // 1、读取并校验台账：只允许 NEW 重放，已处理记录不会再次进入正常发送流程。
         if (deadLetter == null) {
             return rejected("死信记录不存在", null);
         }
@@ -166,7 +188,7 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
             return rejected("死信记录已处理，不能重复重放", toVO(deadLetter));
         }
 
-        // 2. 达到次数上限的记录保持 NEW，便于管理员继续审计。
+        // 2、先检查重放次数上限；达到上限时保持 NEW，返回原因供管理员审计。
         int replayCount = deadLetter.getReplayCount() == null
                 ? 0
                 : deadLetter.getReplayCount();
@@ -174,26 +196,27 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
             return rejected("已达到最大重放次数", toVO(deadLetter));
         }
 
-        // 3. 三个业务 id 都必须是 JSON 数字，保证消息回到主队列后可被消费。
+        // 3、校验 payload 能否还原为消息：三个 ID 必须是可转为 Long 的整数，字符串 ID 不接受。
+        // 保存时截断过的大消息也可能在这里解析失败，此时标记 DISCARDED 并保留原因。
         ReservationMessageDTO message = parseReplayablePayload(deadLetter.getPayload());
         if (message == null) {
             return discard(deadLetter, replayCount,
                     "PAYLOAD_NOT_REPLAYABLE", "payload 无法重放");
         }
 
-        // 4. 预约事实表已有同 id 记录时不得再投递。
+        // 4、事实表已有该 ID 就无需重放，转 DISCARDED；不能只看请求账本判断是否已经落库。
         Reservation persisted = reservationMapper.selectById(message.getReservationId());
         if (persisted != null) {
             return discard(deadLetter, replayCount,
                     "ALREADY_PERSISTED", "已落库，无需重放");
         }
 
-        // 5. 已补偿请求的名额已经归还，再投递会造成超发。
+        // 5、账本为 COMPENSATED 表示请求已终结，不再重放，避免没有名额预占却创建预约。
         ReservationRequest request = null;
         try {
             request = reservationRequestService.getByRequestId(message.getReservationId());
         } catch (Exception e) {
-            // 与主消费者保持一致：账本缺失或暂时不可查询都不阻断事实表落库。
+            // 当前重放实现对账本查询异常按未知状态继续；主消费者自身查询异常则会进入拒绝分支。
             log.error("重放前查询预约请求账本失败，按未知状态继续：reservationId={}",
                     message.getReservationId(), e);
         }
@@ -202,13 +225,14 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
                     "COMPENSATED", "请求已补偿，无法重放");
         }
 
-        // 6. 使用与正常生产者一致的 publisher confirm + return 判定。
+        // 6、重新投到正常创建路由，仍由同一消费者幂等落库；Confirm ACK 且未 Return 才算投递确认。
         ReservationDlqReplayVO publishFailure = publish(message, deadLetter);
         if (publishFailure != null) {
             return publishFailure;
         }
 
-        // 7. 只在确认成功后以预检值做乐观 CAS；投递失败绝不修改台账。
+        // 7、投递确认后再用 NEW 状态和原次数 CAS 为 REPLAYED；这只是治理进度，不是预约落库结果。
+        // CAS 在发送之后，两个并发调用可能都已发出消息，故仍依赖消费端幂等，不能保证只发送一次。
         boolean updated = reservationDlqMapper.update(null,
                 new LambdaUpdateWrapper<ReservationDlq>()
                         .eq(ReservationDlq::getId, deadLetter.getId())
@@ -251,6 +275,7 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
 
     private ReservationDlqReplayVO publish(
             ReservationMessageDTO message, ReservationDlq deadLetter) {
+        // 1、为当前重放关联确认结果，再发到原创建交换机，最多等待 5 秒。
         CorrelationData correlationData = new CorrelationData(
                 String.valueOf(message.getReservationId()));
         try {
@@ -261,6 +286,7 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
                     correlationData);
             CorrelationData.Confirm confirm = correlationData.getFuture()
                     .get(5, TimeUnit.SECONDS);
+            // 2、NACK 或 Return 均返回拒绝原因，外层不会推进台账；ACK 也不能替代消费者的落库确认。
             if (!confirm.isAck()) {
                 log.error("死信重放收到 confirm NACK：dlqId={}，reservationId={}，reason={}",
                         deadLetter.getId(), message.getReservationId(), confirm.getReason());
@@ -271,6 +297,7 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
                         deadLetter.getId(), message.getReservationId());
                 return rejected("REPLAY_CONFIRM_RETURN", toVO(deadLetter));
             }
+            // 3、null 仅表示发送确认通过，外层随后才尝试 CAS 更新死信台账。
             return null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -278,6 +305,7 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
                     deadLetter.getId(), message.getReservationId(), e);
             return rejected("REPLAY_PUBLISH_UNKNOWN", toVO(deadLetter));
         } catch (Exception e) {
+            // 等待失败时消息可能已经在途，保留未知结果；台账保持 NEW，后续重放仍可能重复发送。
             log.error("死信重放发送结果不确定：dlqId={}，reservationId={}",
                     deadLetter.getId(), message.getReservationId(), e);
             return rejected("REPLAY_PUBLISH_UNKNOWN", toVO(deadLetter));
@@ -287,6 +315,7 @@ public class ReservationDlqServiceImpl implements IReservationDlqService {
     private ReservationDlqReplayVO discard(
             ReservationDlq deadLetter, int replayCount, String code, String reason) {
         String failureReason = appendDiscardReason(deadLetter.getFailureReason(), code);
+        // 状态与重放次数同时作为 CAS 条件，避免覆盖管理员并发做出的治理结论。
         boolean updated = reservationDlqMapper.update(null,
                 new LambdaUpdateWrapper<ReservationDlq>()
                         .eq(ReservationDlq::getId, deadLetter.getId())

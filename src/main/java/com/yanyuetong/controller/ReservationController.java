@@ -17,6 +17,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
 
+/**
+ * 预约 HTTP 入口：提交返回受理 ID，查询读取预约事实，取消和核验交由对应业务状态机处理。
+ */
 @RestController
 @RequestMapping("/reservation")
 public class ReservationController {
@@ -26,6 +29,7 @@ public class ReservationController {
 
     @PostMapping
     public Result submit(@RequestBody ReservationSubmitDTO request) {
+        // 这里只返回异步受理结果，不等待预约事实落库；实际用户由服务端登录上下文决定。
         return Result.ok(reservationService.submit(request.getBatchId()));
     }
 

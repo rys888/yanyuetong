@@ -42,6 +42,11 @@ import javax.annotation.Resource;
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 预约用例编排服务：负责入口校验、Redis 名额预占、消息投递和失败补偿。
+ * 预占与 MySQL 落库跨越 Redis、RabbitMQ 和数据库，因此不追求分布式事务，
+ * 而是通过请求账本、幂等回滚和定时对账最终收敛。
+ */
 @Slf4j
 @Service
 public class ReservationServiceImpl implements IReservationService {
@@ -76,8 +81,16 @@ public class ReservationServiceImpl implements IReservationService {
     @Resource
     private RabbitTemplate rabbitTemplate;
 
+    /**
+     * 提交预约并返回全链路共用的请求 ID。
+     * 先创建 PRE_ACCEPTED 账本，再预占 Redis 名额，可确保后续投递失败或结果未知时有可对账的持久化记录。
+     *
+     * @param batchId 预约批次 ID
+     * @return 预约请求 ID，同时作为最终预约 ID
+     */
     @Override
     public Long submit(Long batchId) {
+        // 1、先确认请求参数和当前登录用户。身份由 Web 拦截器写入 UserHolder，不信任客户端传入 userId。
         if (batchId == null) {
             throw new BadRequestException("预约批次不存在");
         }
@@ -85,6 +98,7 @@ public class ReservationServiceImpl implements IReservationService {
         if (user == null) {
             throw new ForbiddenException("请先登录");
         }
+        // 2、直接读取 MySQL 的批次、设备状态和预约窗口，避免用设备详情缓存中的旧状态放行预约。
         ReservationBatch batch = reservationBatchService.getById(batchId);
         if (batch == null) {
             throw new BadRequestException("预约批次不存在");
@@ -105,6 +119,8 @@ public class ReservationServiceImpl implements IReservationService {
         if (now.isAfter(batch.getBookingEndTime())) {
             throw new BadRequestException("预约已截止");
         }
+        // 3、生成贯穿账本、MQ 和预约事实表的同一个 ID，再创建 PRE_ACCEPTED 请求账本。
+        // 必须先建账再预占：即使后面进程中断，定时对账也能找到这次未完成的请求。
         long reservationId = redisIdWorker.nextId("reservation");
         try {
             reservationRequestService.createPreAccepted(reservationId, user.getId(), batchId);
@@ -113,10 +129,12 @@ public class ReservationServiceImpl implements IReservationService {
                     reservationId, user.getId(), batchId, e);
             throw new ServiceUnavailableException("预约失败，请重试");
         }
+        // 4、调用 Lua 原子校验并扣减 Redis 名额、记录用户占位。这里只是预占，尚未插入 MySQL 预约。
         ReservationResultCode resultCode = reservationQuotaExecutor.tryAcquire(batch, user.getId(), now);
         if (resultCode != ReservationResultCode.SUCCESS) {
             log.warn("预约名额抢占被拒：batchId={}, userId={}, resultCode={}",
                     batchId, user.getId(), resultCode);
+            // 预占被拒时没有本次名额需要归还；只将账本终结并记录原因，避免一直留在待对账集合。
             try {
                 boolean compensated = reservationRequestService.casStatusWithFailReason(
                         reservationId,
@@ -133,14 +151,24 @@ public class ReservationServiceImpl implements IReservationService {
             }
             throw new BadRequestException(resultCode.getMessage());
         }
+        // 5、投递创建消息，并按“已确认、确定未投递、结果未知”分别推进账本或补偿。
         publishReservationMessage(reservationId, user.getId(), batchId, now);
+        // 6、返回的是已受理请求的 ID，不代表消费者已落库；后续查询预约事实仍可能暂时查不到。
         return reservationId;
     }
 
+    /**
+     * 取消本人预约。MySQL 状态与名额在一个事务中先完成，事务成功后才尝试归还 Redis 名额；
+     * Redis 失败不反向回滚数据库，而由定时任务根据 quota_released 重试。
+     *
+     * @param reservationId 预约 ID
+     */
     @Override
     public void cancel(Long reservationId) {
+        // 1、取得本人身份，并保存后续 Redis 回滚需要的用户、批次信息。
         UserDTO user = requireUser("无权取消该预约");
         Reservation reservation = reservationMapper.selectById(reservationId);
+        // 2、经独立 Spring Service 调用事务方法：CAS 取消预约并回补 MySQL 名额，返回时事务已完成。
         ReservationCancelOutcome outcome = reservationLifecycleService.cancel(
                 reservationId, user.getId(), LocalDateTime.now());
         if (outcome == ReservationCancelOutcome.NOT_FOUND) {
@@ -149,6 +177,7 @@ public class ReservationServiceImpl implements IReservationService {
         if (outcome == ReservationCancelOutcome.NOT_CANCELLABLE) {
             throw new BadRequestException("当前状态不可取消");
         }
+        // 3、只有真正完成状态跃迁的调用能继续归还 Redis；重复取消应幂等返回。
         if (outcome != ReservationCancelOutcome.TRANSITIONED) {
             // ALREADY_CANCELLED：本次调用没有发生 RESERVED→CANCELLED 的状态跃迁，幂等返回。
             // 绝不能在此路径触碰 Redis 或 quota_released：rollback 的 Lua 虽然自身幂等，
@@ -159,6 +188,8 @@ public class ReservationServiceImpl implements IReservationService {
             return;
         }
 
+        // 4、MySQL 事务之外执行 Redis Lua，再标记 quota_released，供定时任务识别尚未完成的补偿。
+        // 两个存储不能一起提交；Redis 异常时保留标记为 false，等待 releasePendingQuotas 重试。
         try {
             int rollbackCode = reservationQuotaRollbackExecutor.rollback(
                     reservation.getBatchId(), user.getId());
@@ -177,6 +208,7 @@ public class ReservationServiceImpl implements IReservationService {
 
     @Override
     public void verify(Long reservationId) {
+        // 1、沿“预约→批次→设备”找到实验室；端点上的 LAB_ADMIN 注解只做角色检查。
         requireUser("无权核验该预约");
         Reservation reservation = reservationMapper.selectById(reservationId);
         if (reservation == null) {
@@ -190,6 +222,7 @@ public class ReservationServiceImpl implements IReservationService {
         if (equipment == null) {
             throw new ForbiddenException("无权核验该预约");
         }
+        // 2、确认该实验室归当前管理员负责，再进入生命周期事务完成核验。
         laboratoryService.assertManageable(equipment.getLaboratoryId());
         reservationLifecycleService.complete(reservationId, LocalDateTime.now());
     }
@@ -238,6 +271,8 @@ public class ReservationServiceImpl implements IReservationService {
             Long userId,
             Long batchId,
             LocalDateTime createTime) {
+        // 1、把预占时的请求快照放入消息，消费线程不能使用 Web 请求线程里的 ThreadLocal。
+        // CorrelationData 只关联本次发布确认，不负责消费者处理结果。
         ReservationMessageDTO message = new ReservationMessageDTO();
         message.setReservationId(reservationId);
         message.setUserId(userId);
@@ -248,6 +283,8 @@ public class ReservationServiceImpl implements IReservationService {
         PublishOutcome outcome;
         String failureReason = null;
         try {
+            // 2、发到创建交换机并最多等待 5 秒；ACK 不代表消费完成，更不代表 MySQL 已提交。
+            // mandatory return 还要排除“broker 接收但无队列可路由”的情况，两项都满足才记为 ACKED。
             rabbitTemplate.convertAndSend(
                     RabbitMQConfig.RESERVATION_EXCHANGE,
                     RabbitMQConfig.RESERVATION_CREATE_ROUTING_KEY,
@@ -264,11 +301,13 @@ public class ReservationServiceImpl implements IReservationService {
                 outcome = PublishOutcome.ACKED;
             }
         } catch (AmqpConnectException e) {
+            // 连 broker 都未连接成功，按本次未投递处理，后面可立即归还预占名额。
             log.error("预约消息连接 RabbitMQ 失败：reservationId={}，userId={}，batchId={}",
                     reservationId, userId, batchId, e);
             outcome = PublishOutcome.DEFINITELY_NOT_DELIVERED;
             failureReason = "AMQP_CONNECT_FAILED";
         } catch (InterruptedException e) {
+            // 等待确认被中断不等于消息未到达；保留线程中断标记，并按未知结果处理。
             Thread.currentThread().interrupt();
             log.error("等待预约消息确认时被中断：reservationId={}，userId={}，batchId={}",
                     reservationId, userId, batchId, e);
@@ -279,12 +318,15 @@ public class ReservationServiceImpl implements IReservationService {
             outcome = PublishOutcome.UNKNOWN;
         }
 
+        // 3、投递确认后尝试 PRE_ACCEPTED→PUBLISHED；消费者可能已经更早将账本推进到 CONFIRMED。
         if (outcome == PublishOutcome.ACKED) {
             markPublishedWithRetry(reservationId);
             return;
         }
 
+        // 4、确定未投递时先归还 Redis，再将账本置为 COMPENSATED；回滚失败就留给定时任务继续处理。
         if (outcome == PublishOutcome.DEFINITELY_NOT_DELIVERED) {
+            // 只有结果确定为未投递时才能安全归还名额，否则可能与已在途中的消息并发导致超发。
             try {
                 int rollbackCode = reservationQuotaRollbackExecutor.rollback(batchId, userId);
                 log.warn("预约消息确定未投递，名额回滚完成：reservationId={}，rollbackCode={}",
@@ -311,6 +353,8 @@ public class ReservationServiceImpl implements IReservationService {
             throw new ServiceUnavailableException("预约失败，请重试");
         }
 
+        // 5、确认超时等异常无法证明消息未达，保留名额并尝试转 UNKNOWN，避免与在途消息同时占用同一名额。
+        // 返回“待确认”后，消费者或定时对账仍可推进最终结果；HTTP 失败不等于最终预约失败。
         try {
             boolean unknown = reservationRequestService.casStatus(
                     reservationId,
@@ -329,6 +373,7 @@ public class ReservationServiceImpl implements IReservationService {
     }
 
     private void markPublishedWithRetry(long reservationId) {
+        // 1、发布线程和消费者可并发推进账本；只允许从 PRE_ACCEPTED 更新，不能覆盖更晚的状态。
         for (int attempt = 1; attempt <= 2; attempt++) {
             try {
                 if (reservationRequestService.casStatus(
@@ -344,7 +389,7 @@ public class ReservationServiceImpl implements IReservationService {
                         reservationId, attempt, e);
             }
         }
-        // 重试耗尽：若账本已被消费者/对账推进为终态，这是正常的先后竞争，不是故障
+        // 2、两次尝试后再读账本：已被消费或对账推进至终态是正常竞争，其余情况留日志并交给对账。
         try {
             ReservationRequest current = reservationRequestService.getByRequestId(reservationId);
             if (current != null && current.getStatus().isTerminal()) {

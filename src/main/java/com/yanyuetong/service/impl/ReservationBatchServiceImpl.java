@@ -40,6 +40,10 @@ import static com.yanyuetong.utils.RedisConstants.RESERVATION_BATCH_QUOTA_KEY;
 import static com.yanyuetong.utils.RedisConstants.RESERVATION_BATCH_QUOTA_TTL_BUFFER_HOURS;
 import static com.yanyuetong.utils.RedisConstants.RESERVATION_BATCH_USERS_KEY;
 
+/**
+ * 批次管理与名额初始化：发布时连接 MySQL 批次状态和 Redis 预占入口，关闭或取消后清理入口。
+ * 批次状态决定是否受理新请求，已受理消息的落库则由预约消费链路继续处理。
+ */
 @Slf4j
 @Service
 public class ReservationBatchServiceImpl
@@ -110,6 +114,7 @@ public class ReservationBatchServiceImpl
 
     @Override
     public void publish(Long id) {
+        // 1、校验实验室归属、草稿状态、设备可用性和两个时间窗口，确保发布的是有效批次。
         ReservationBatch batch = getRequiredBatch(id);
         Equipment equipment = assertEquipmentManageable(batch.getEquipmentId());
         if (batch.getStatus() != ReservationBatchStatus.DRAFT) {
@@ -118,6 +123,8 @@ public class ReservationBatchServiceImpl
         LocalDateTime now = LocalDateTime.now();
         validatePublishInvariants(batch, equipment, now);
 
+        // 2、先在 Redis 创建名额键，TTL 延续至使用结束后的缓冲期，供预约 Lua 与延迟补偿使用。
+        // SET NX 把初始化和过期时间一起写入，阻止并发发布重置已经创建的名额。
         String key = quotaKey(id);
         long ttlSeconds = Duration.between(
                 now,
@@ -134,6 +141,8 @@ public class ReservationBatchServiceImpl
             throw new BadRequestException("发布占用标记已存在，疑似重复发布");
         }
 
+        // 3、以读取时的状态和业务字段作为 CAS 条件，防止管理员并发修改草稿后仍发布旧快照。
+        // 先初始化 Redis，再开放 MySQL 状态，减少用户看到 PUBLISHED 但名额尚未初始化的窗口。
         boolean updated = update(null, new LambdaUpdateWrapper<ReservationBatch>()
                 .eq(ReservationBatch::getId, id)
                 .eq(ReservationBatch::getStatus, ReservationBatchStatus.DRAFT)
@@ -146,10 +155,11 @@ public class ReservationBatchServiceImpl
                 .set(ReservationBatch::getStatus, ReservationBatchStatus.PUBLISHED)
                 .set(ReservationBatch::getRemainingQuota, batch.getTotalQuota()));
         if (!updated) {
+            // 4、CAS 未命中时撤销名额键；Redis 与 MySQL 没有共同事务，此分支是显式清理。
             try {
                 stringRedisTemplate.delete(key);
             } catch (RuntimeException ignored) {
-                // MySQL remains authoritative; stale quota has a finite TTL.
+                // 删除失败时保留有限 TTL；MySQL 未发布仍会被提交入口拒绝，不能仅凭 Redis 键受理预约。
             }
             throw new BadRequestException("批次状态已被并发修改，发布失败");
         }
@@ -157,6 +167,7 @@ public class ReservationBatchServiceImpl
 
     @Override
     public void close(Long id) {
+        // 1、确认管理归属并通过 CAS 将 PUBLISHED→CLOSED，让后续提交在 MySQL 状态检查时被拒绝。
         ReservationBatch batch = getRequiredBatch(id);
         assertEquipmentManageable(batch.getEquipmentId());
         if (batch.getStatus() != ReservationBatchStatus.PUBLISHED) {
@@ -169,11 +180,13 @@ public class ReservationBatchServiceImpl
         if (!updated) {
             throw new BadRequestException("批次状态已变化，关闭失败");
         }
+        // 2、删除名额和用户集合，关闭 Redis 预占入口；这不会撤销关闭前已发送的创建消息。
         stringRedisTemplate.delete(Arrays.asList(quotaKey(id), usersKey(id)));
     }
 
     @Override
     public void cancel(Long id) {
+        // 1、批次取消只允许 DRAFT/PUBLISHED→CANCELLED；它与“用户取消单条预约”是不同用例。
         ReservationBatch batch = getRequiredBatch(id);
         assertEquipmentManageable(batch.getEquipmentId());
         if (batch.getStatus() != ReservationBatchStatus.DRAFT
@@ -189,6 +202,7 @@ public class ReservationBatchServiceImpl
         if (!updated) {
             throw new BadRequestException("批次状态已变化，取消失败");
         }
+        // 2、状态更新成功后清理 Redis 入口；此方法没有逐条取消已经存在的预约事实。
         stringRedisTemplate.delete(Arrays.asList(quotaKey(id), usersKey(id)));
     }
 
@@ -281,6 +295,8 @@ public class ReservationBatchServiceImpl
             ReservationBatch batch,
             Equipment equipment,
             LocalDateTime now) {
+        // 1、区分“预约开放/截止”和“设备使用开始/结束”两个窗口，预约截止不能晚于使用开始。
+        // 这些约束也是 Redis 名额与用户占位 TTL 计算的前提，不能只检查剩余名额。
         if (batch.getTotalQuota() == null || batch.getTotalQuota() < 1) {
             throw new BadRequestException("总名额必须大于等于1");
         }
@@ -300,10 +316,13 @@ public class ReservationBatchServiceImpl
         if (!batch.getBookingEndTime().isAfter(now)) {
             throw new BadRequestException("预约截止时间必须晚于当前时间");
         }
+        // 2、只有可用且允许预约的设备才能发布；提交预约时还会再次读取设备状态进行检查。
         if (equipment.getStatus() != EquipmentStatus.AVAILABLE
                 || !Boolean.TRUE.equals(equipment.getBookingEnabled())) {
             throw new BadRequestException("设备当前不可预约");
         }
+        // 3、排除自身和已取消批次，检查同设备使用时段交叉；两个时段首尾相接不算重叠。
+        // 这里只是查询校验，没有给设备范围加锁，不能把它当成并发发布下的唯一性约束。
         long overlapCount = count(new LambdaQueryWrapper<ReservationBatch>()
                 .ne(ReservationBatch::getId, batch.getId())
                 .ne(ReservationBatch::getStatus, ReservationBatchStatus.CANCELLED)
@@ -324,12 +343,14 @@ public class ReservationBatchServiceImpl
     }
 
     private void fillRemainingQuotaFromRedis(List<ReservationBatchVO> batches) {
+        // 1、只覆盖已发布批次的展示名额：Redis 包含已预占但尚未落库的数量，比 MySQL 更接近受理现场。
         List<ReservationBatchVO> published = batches.stream()
                 .filter(batch -> batch.getStatus() == ReservationBatchStatus.PUBLISHED)
                 .collect(Collectors.toList());
         if (published.isEmpty()) {
             return;
         }
+        // 2、按同一顺序批量读取 Key，避免列表中每个批次分别访问 Redis。
         List<String> keys = published.stream()
                 .map(batch -> quotaKey(batch.getId()))
                 .collect(Collectors.toList());
@@ -340,6 +361,8 @@ public class ReservationBatchServiceImpl
                         published.stream().map(ReservationBatchVO::getId).collect(Collectors.toList()));
                 return;
             }
+            // 3、有值就覆盖展示字段；缺失或读取异常保留原来的 MySQL 值，仅用于查询展示。
+            // 这里不补建 Redis 名额键，提交时仍需 Lua 真正预占，不能把展示回退当作可以预约。
             List<Long> missingBatchIds = new ArrayList<>();
             for (int i = 0; i < published.size(); i++) {
                 String quota = quotas.get(i);
