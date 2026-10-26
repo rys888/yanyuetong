@@ -50,3 +50,9 @@ findings.md
 progress.md
 task_plan.md
 jmeter.log
+
+### Office / 编辑器临时锁文件 ###
+# Word / Excel 打开文档时生成，形如 `.~xxx.docx`、`~$xxx.docx`。
+# 它们是持有者进程的锁文件，内容无意义且随打开状态变化，绝不能入库。
+~$*
+.~*

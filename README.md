@@ -428,9 +428,7 @@ bash scripts/verify-acceptance.sh   # 仓库级终验闸门
 |---|---|
 | [docs/APPENDIX-实现细节与已知边界.md](docs/APPENDIX-实现细节与已知边界.md) | 实现细节、接口错误语义、实测记录、已知边界 |
 | [docs/MIGRATION_STATUS.md](docs/MIGRATION_STATUS.md) | 重构迁移总台账 |
-| [docs/study/README.md](docs/study/README.md) | **后端学习手册**（14 篇，从业务模型讲到并发细节，面向面试） |
-| [docs/study/13-项目面试问答.md](docs/study/13-项目面试问答.md) | 面试问答 |
-| [docs/study/14-一分钟与三分钟项目介绍.md](docs/study/14-一分钟与三分钟项目介绍.md) | 项目介绍口述稿 |
+| [docs/study/source-walkthrough/README.md](docs/study/source-walkthrough/README.md) | **后端源码精读手册**（14 篇，按真实调用链走：业务场景 → 调用链 → 源码定位 → 设计原因 → 面试重点） |
 | [docs/frontend/FRONTEND-DESIGN.md](docs/frontend/FRONTEND-DESIGN.md) | 前端设计说明 |
 | [docs/plan/](docs/plan/) | 原始需求与分阶段重构计划 |
 | [docs/refactor/](docs/refactor/) | 各阶段设计稿与评审记录（PHASE0–PHASE10） |
